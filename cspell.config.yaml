@@ -12,15 +12,19 @@ words:
   - corev1
   - CUDA
   - CUDNN
+  - daocloud
   - dcgm
   - dcgmi
   - exitcode
   - fullname
+  - GOARCH
   - Infof
   - jellydator
+  - kcover
   - klog
   - KUBECONFIG
   - Kubeflow
+  - ldflags
   - leaderelection
   - metav1
   - NCCL
