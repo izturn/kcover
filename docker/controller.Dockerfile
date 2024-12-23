@@ -1,5 +1,5 @@
 # builder
-FROM --platform=$BUILDPLATFORM m.daocloud.io/docker.io/golang:1.22.2 as builder
+FROM --platform=$BUILDPLATFORM m.daocloud.io/docker.io/golang:1.23.2 as builder
 
 WORKDIR /app
 
