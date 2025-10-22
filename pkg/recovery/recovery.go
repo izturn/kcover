@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/samber/lo"
-
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
+
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -18,16 +18,16 @@ import (
 
 type RecoveryController struct {
 	client          kubernetes.Interface
-	recorder        events.Recorder
+	eventReader     events.Reader
 	stop            chan struct{}
 	restartDuration time.Duration
 	restarts        *ttlcache.Cache[string, time.Time]
 }
 
-func NewRecoveryController(cli kubernetes.Interface, recorder events.Recorder) *RecoveryController {
+func NewRecoveryController(cli kubernetes.Interface, er events.Reader) *RecoveryController {
 	return &RecoveryController{
 		client:          cli,
-		recorder:        recorder,
+		eventReader:     er,
 		stop:            make(chan struct{}),
 		restartDuration: time.Second * 30,
 		restarts:        ttlcache.New[string, time.Time](),
@@ -146,11 +146,11 @@ func (r *RecoveryController) onEvent(e events.CollectorEvent) {
 }
 
 func (r *RecoveryController) Start() error {
-	if r.recorder == nil {
+	if r.eventReader == nil {
 		return fmt.Errorf("recorder is nil")
 	}
 	go func() {
-		for e := range r.recorder.EventChan() {
+		for e := range r.eventReader.EventChan() {
 			r.onEvent(e)
 		}
 	}()

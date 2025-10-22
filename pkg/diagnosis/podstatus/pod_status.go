@@ -9,6 +9,7 @@ import (
 	"github.com/baizeai/kcover/pkg/diagnosis"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/runner"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -19,16 +20,16 @@ var _ runner.Runner = (*podStatusCollector)(nil)
 var _ diagnosis.Diagnostic = (*podStatusCollector)(nil)
 
 type podStatusCollector struct {
-	client     kubernetes.Interface
-	eventsChan chan events.CollectorEvent
-	stop       chan struct{}
+	client kubernetes.Interface
+	events chan events.CollectorEvent
+	stop   chan struct{}
 }
 
 func NewPodStatusCollector(cli kubernetes.Interface) (diagnosis.Diagnostic, error) {
 	return &podStatusCollector{
-		client:     cli,
-		eventsChan: make(chan events.CollectorEvent),
-		stop:       make(chan struct{}),
+		client: cli,
+		events: make(chan events.CollectorEvent),
+		stop:   make(chan struct{}),
 	}, nil
 }
 
@@ -42,7 +43,7 @@ func (p *podStatusCollector) onPodUpdate(oldPod, newPod *corev1.Pod) {
 	for _, cs := range newPod.Status.ContainerStatuses {
 		if cs.State.Terminated != nil {
 			if cs.State.Terminated.Reason == "Error" {
-				p.eventsChan <- events.CollectorEvent{
+				p.events <- events.CollectorEvent{
 					TargetType: events.Pod,
 					Namespace:  newPod.Namespace,
 					Name:       newPod.Name,
@@ -89,9 +90,9 @@ func (p *podStatusCollector) Start() error {
 
 func (p *podStatusCollector) Stop() {
 	close(p.stop)
-	close(p.eventsChan)
+	close(p.events)
 }
 
-func (p *podStatusCollector) Events() <-chan events.CollectorEvent {
-	return p.eventsChan
+func (p *podStatusCollector) EventChan() <-chan events.CollectorEvent {
+	return p.events
 }

@@ -30,7 +30,7 @@ type kubeEventsRecorder struct {
 	recorder   record.EventRecorder
 }
 
-func NewKubeEventsRecorder(cli kubernetes.Interface, watchEvent bool) Recorder {
+func NewKubeEventsRecorder(cli kubernetes.Interface, watchEvent bool) *kubeEventsRecorder {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1.EventSinkImpl{
 		Interface: cli.CoreV1().Events(""),

@@ -7,5 +7,5 @@ import (
 
 type Diagnostic interface {
 	runner.Runner
-	Events() <-chan events.CollectorEvent
+	events.Reader
 }

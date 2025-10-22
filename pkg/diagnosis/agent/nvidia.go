@@ -1,4 +1,6 @@
-package nvidiadiag
+//go:build nvidia
+
+package agent
 
 import (
 	"time"
@@ -6,27 +8,29 @@ import (
 	"github.com/baizeai/kcover/pkg/diagnosis"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/runner"
+
 	"k8s.io/klog/v2"
 )
 
-var _ runner.Runner = (*dcgmDiag)(nil)
-var _ diagnosis.Diagnostic = (*dcgmDiag)(nil)
+var _ runner.Runner = (*nvidiaDiag)(nil)
+var _ diagnosis.Diagnostic = (*nvidiaDiag)(nil)
 
-type dcgmDiag struct {
+type nvidiaDiag struct {
 	nodeName string
 	events   chan events.CollectorEvent
 	stop     chan struct{}
 }
 
-func NewDCGMDiagnosis(nodeName string) (diagnosis.Diagnostic, error) {
-	return &dcgmDiag{
+func NewDiagnosis(nodeName string) (diagnosis.Diagnostic, error) {
+	klog.Info("for vendor: nvidia")
+	return &nvidiaDiag{
 		events:   make(chan events.CollectorEvent),
 		stop:     make(chan struct{}),
 		nodeName: nodeName,
 	}, nil
 }
 
-func (d *dcgmDiag) Start() error {
+func (d *nvidiaDiag) Start() error {
 	go func() {
 		t := time.NewTicker(time.Second * 30)
 		defer t.Stop()
@@ -50,10 +54,10 @@ func (d *dcgmDiag) Start() error {
 	return nil
 }
 
-func (d *dcgmDiag) Stop() {
+func (d *nvidiaDiag) Stop() {
 	close(d.stop)
 }
 
-func (d *dcgmDiag) Events() <-chan events.CollectorEvent {
+func (d *nvidiaDiag) EventChan() <-chan events.CollectorEvent {
 	return d.events
 }

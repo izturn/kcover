@@ -10,6 +10,7 @@ import (
 	"github.com/baizeai/kcover/pkg/kube"
 	"github.com/baizeai/kcover/pkg/recovery"
 	"github.com/baizeai/kcover/pkg/runner"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	coordinationv1client "k8s.io/client-go/kubernetes/typed/coordination/v1"
@@ -26,9 +27,12 @@ func main() {
 
 	cfg := kube.GetK8sConfigConfigWithFile("", "")
 	client := kubernetes.NewForConfigOrDie(cfg)
-	var eventBus events.Recorder
-	var rec runner.Runner
-	var diag runner.Runner
+
+	var (
+		eventBus events.Recorder
+		recov    runner.Runner
+		diag     runner.Runner
+	)
 	leaderElectionConfig := leaderelection.LeaderElectionConfig{
 		Lock: &resourcelock.LeaseLock{
 			Client: coordinationv1client.NewForConfigOrDie(kube.GetK8sConfigConfigWithFile("", "")),
@@ -54,12 +58,12 @@ func main() {
 				// 当当前实例成为 leader 时，开始执行 controller 逻辑
 				var err error
 				eventBus = events.NewKubeEventsRecorder(client, true)
-				rec = recovery.NewRecoveryController(client, eventBus)
-				diag, err = controller.NewControllerDiagnostic(client, eventBus)
+				recov = recovery.NewRecoveryController(client, eventBus)
+				diag, err = controller.NewDiagnostic(client, eventBus)
 				if err != nil {
 					panic(err)
 				}
-				if err := rec.Start(); err != nil {
+				if err := recov.Start(); err != nil {
 					panic(err)
 				}
 				if err := diag.Start(); err != nil {
@@ -72,7 +76,7 @@ func main() {
 				klog.Info("kcover started")
 			},
 			OnStoppedLeading: func() {
-				rec.Stop()
+				recov.Stop()
 				diag.Stop()
 				eventBus.Stop()
 				klog.Info("kcover stopped")
