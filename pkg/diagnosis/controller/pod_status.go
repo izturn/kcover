@@ -1,4 +1,4 @@
-package podstatus
+package controller
 
 import (
 	"fmt"
@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 )
 
 var _ runner.Runner = (*podStatusCollector)(nil)
@@ -25,7 +26,7 @@ type podStatusCollector struct {
 	stop   chan struct{}
 }
 
-func NewPodStatusCollector(cli kubernetes.Interface) (diagnosis.Diagnostic, error) {
+func newPodStatusCollector(cli kubernetes.Interface) (diagnosis.Diagnostic, error) {
 	return &podStatusCollector{
 		client: cli,
 		events: make(chan events.CollectorEvent),
@@ -59,7 +60,7 @@ func (p *podStatusCollector) Start() error {
 	factory := informers.NewSharedInformerFactory(p.client, time.Minute)
 	informer := factory.Core().V1().Pods().Informer()
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			newPod := obj.(*corev1.Pod)
 			if newPod.Labels[constants.EnabledRecoveryLabel] == "" {
 				return
@@ -85,6 +86,7 @@ func (p *podStatusCollector) Start() error {
 	}
 
 	go informer.Run(p.stop)
+	klog.Info("the podStatusCollector is started")
 	return nil
 }
 

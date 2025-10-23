@@ -24,13 +24,13 @@ import (
 
 type kubeEventsRecorder struct {
 	client     kubernetes.Interface
-	eventChan  chan CollectorEvent
+	events     chan CollectorEvent
 	stop       chan struct{}
 	watchEvent bool
 	recorder   record.EventRecorder
 }
 
-func NewKubeEventsRecorder(cli kubernetes.Interface, watchEvent bool) *kubeEventsRecorder {
+func NewKubeEventsRecorder(cli kubernetes.Interface, watchEvent bool) Recorder {
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartRecordingToSink(&v1.EventSinkImpl{
 		Interface: cli.CoreV1().Events(""),
@@ -38,7 +38,7 @@ func NewKubeEventsRecorder(cli kubernetes.Interface, watchEvent bool) *kubeEvent
 	recorder := eventBroadcaster.NewRecorder(runtime.NewScheme(), corev1.EventSource{Component: "kcover"})
 	return &kubeEventsRecorder{
 		client:     cli,
-		eventChan:  make(chan CollectorEvent),
+		events:     make(chan CollectorEvent),
 		stop:       make(chan struct{}),
 		watchEvent: watchEvent,
 		recorder:   recorder,
@@ -54,7 +54,7 @@ func (a *kubeEventsRecorder) Start() error {
 	informer := factory.Core().V1().Events().Informer()
 
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			event := obj.(*corev1.Event)
 			eventTimestamp := event.LastTimestamp
 			if eventTimestamp.IsZero() {
@@ -72,7 +72,7 @@ func (a *kubeEventsRecorder) Start() error {
 					Version: "v1",
 					Kind:    "Pod",
 				}:
-					a.eventChan <- CollectorEvent{
+					a.events <- CollectorEvent{
 						TargetType: Pod,
 						Namespace:  obj.Namespace,
 						Name:       obj.Name,
@@ -84,7 +84,7 @@ func (a *kubeEventsRecorder) Start() error {
 					Version: "v1",
 					Kind:    "Node",
 				}:
-					a.eventChan <- CollectorEvent{
+					a.events <- CollectorEvent{
 						TargetType: Node,
 						Name:       obj.Name,
 						EventType:  Error, // todo change me
@@ -100,12 +100,13 @@ func (a *kubeEventsRecorder) Start() error {
 		return err
 	}
 	go informer.Run(a.stop)
-
+	klog.Info("the kubeEventsRecorder is started")
 	return nil
 }
 
 func (a *kubeEventsRecorder) Stop() {
 	close(a.stop)
+	close(a.events)
 }
 
 func (a *kubeEventsRecorder) recordToPod(e CollectorEvent) error {
@@ -160,5 +161,5 @@ func (a *kubeEventsRecorder) RecordEvent(e CollectorEvent) error {
 }
 
 func (a *kubeEventsRecorder) EventChan() <-chan CollectorEvent {
-	return a.eventChan
+	return a.events
 }

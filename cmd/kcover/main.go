@@ -55,7 +55,7 @@ func main() {
 		RetryPeriod:     2 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
-				// 当当前实例成为 leader 时，开始执行 controller 逻辑
+				// 当前实例成为 leader 时，开始执行 controller 逻辑
 				var err error
 				eventBus = events.NewKubeEventsRecorder(client, true)
 				recov = recovery.NewRecoveryController(client, eventBus)
@@ -73,13 +73,13 @@ func main() {
 					panic(err)
 				}
 
-				klog.Info("kcover started")
+				klog.Info("kcover is started")
 			},
 			OnStoppedLeading: func() {
 				recov.Stop()
 				diag.Stop()
 				eventBus.Stop()
-				klog.Info("kcover stopped")
+				klog.Info("kcover is stopped")
 			},
 		},
 	}

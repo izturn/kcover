@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/baizeai/kcover/pkg/diagnosis"
-	"github.com/baizeai/kcover/pkg/diagnosis/podstatus"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/runner"
 
@@ -27,7 +26,7 @@ func NewDiagnostic(cli kubernetes.Interface, w events.Writer) (runner.Runner, er
 
 	diags := make([]diagnosis.Diagnostic, 0)
 
-	diagPodCollector, err := podstatus.NewPodStatusCollector(cli)
+	diagPodCollector, err := newPodStatusCollector(cli)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pod status collector: %v", err)
 	}
@@ -39,7 +38,6 @@ func NewDiagnostic(cli kubernetes.Interface, w events.Writer) (runner.Runner, er
 		writer:      w,
 	}, nil
 }
-
 func (c *controllerDiagnostic) Start() error {
 	for _, d := range c.diagnostics {
 		if err := d.Start(); err != nil {
@@ -47,16 +45,17 @@ func (c *controllerDiagnostic) Start() error {
 		}
 	}
 	for _, d := range c.diagnostics {
-		go func(d diagnosis.Diagnostic) {
+		go func() {
 			for e := range d.EventChan() {
 				err := c.writer.RecordEvent(e)
 				if err != nil {
 					klog.Errorf("failed to record event of %T: %v", d, err)
 				}
 			}
-		}(d)
+		}()
 	}
 
+	klog.Info("the controllerDiagnostic is started")
 	return nil
 }
 

@@ -1,11 +1,11 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/baizeai/kcover/pkg/diagnosis"
 	"github.com/baizeai/kcover/pkg/diagnosis/agent"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
@@ -14,50 +14,35 @@ import (
 	"k8s.io/klog/v2"
 )
 
+var pVendor = flag.Int("vendor", 1, "the gpu vendor: 1-metax 2-nvidia default: 1")
+
 func main() {
-	doMain()
+	flag.Parse()
+
+	cfg := kube.GetK8sConfigConfigWithFile("", "")
+	client := kubernetes.NewForConfigOrDie(cfg)
+	evtWriter := events.NewKubeEventsRecorder(client, false)
+
+	diag := agent.MustNewDiagnosis(mustHostName(), agent.Vendor(*pVendor), evtWriter)
+
+	klog.Info("the node info collector is started")
+	diag.Start()
 
 	cc := make(chan os.Signal, 1)
 	signal.Notify(cc, os.Interrupt, syscall.SIGTERM)
 	<-cc
-	klog.Info("collector stopped")
+
+	diag.Stop()
+	klog.Info("the node info collector is stopped")
 }
 
-func doMain() {
-	var hostName string
+func mustHostName() string {
 	if hn := os.Getenv("FAST_RECOVERY_NODE_NAME"); hn != "" {
-		hostName = hn
-	} else {
-		hn, err := os.Hostname()
-		if err != nil {
-			panic(err)
-		}
-		hostName = hn
+		return hn
 	}
-
-	diag, err := agent.NewDiagnosis(hostName)
+	hn, err := os.Hostname()
 	if err != nil {
 		panic(err)
 	}
-
-	diags := []diagnosis.Diagnostic{diag}
-	cfg := kube.GetK8sConfigConfigWithFile("", "")
-	client := kubernetes.NewForConfigOrDie(cfg)
-	recorder := events.NewKubeEventsRecorder(client, false)
-
-	for _, d := range diags {
-		if err := d.Start(); err != nil {
-			panic(err)
-		}
-
-		klog.Infof("diag %T started", d)
-
-		go func(d diagnosis.Diagnostic) {
-			for e := range d.EventChan() {
-				if err := recorder.RecordEvent(e); err != nil {
-					klog.Errorf("record event %+v error: %v", e, err)
-				}
-			}
-		}(d)
-	}
+	return hn
 }

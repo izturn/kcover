@@ -16,7 +16,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-type RecoveryController struct {
+type recoveryController struct {
 	client          kubernetes.Interface
 	eventReader     events.Reader
 	stop            chan struct{}
@@ -24,17 +24,17 @@ type RecoveryController struct {
 	restarts        *ttlcache.Cache[string, time.Time]
 }
 
-func NewRecoveryController(cli kubernetes.Interface, er events.Reader) *RecoveryController {
-	return &RecoveryController{
+func NewRecoveryController(cli kubernetes.Interface, r events.Reader) *recoveryController {
+	return &recoveryController{
 		client:          cli,
-		eventReader:     er,
+		eventReader:     r,
 		stop:            make(chan struct{}),
 		restartDuration: time.Second * 30,
 		restarts:        ttlcache.New[string, time.Time](),
 	}
 }
 
-func (r *RecoveryController) onPodError(namespace, name string) {
+func (r *recoveryController) onPodError(namespace, name string) {
 	pod, err := r.client.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("get pod %s/%s error events error: %v", namespace, name, err)
@@ -51,31 +51,34 @@ func (r *RecoveryController) onPodError(namespace, name string) {
 			return
 		}
 	}
-	if jobLabel, ok := pod.Labels[constants.KubeflowJobLabel]; !ok {
+
+	jobLabel, ok := pod.Labels[constants.KubeflowJobLabel]
+	if !ok {
 		klog.Warningf("pod %s/%s has no job label", namespace, name)
 		return
-	} else {
-		if pod.Spec.RestartPolicy == corev1.RestartPolicyNever {
-			klog.Warningf("pod %s/%s has RestartPolicyNever, will not restart", namespace, name)
-			return
-		}
-		key := fmt.Sprintf("%s/%s", namespace, jobLabel)
-		tv := r.restarts.Get(key)
-		if tv != nil {
-			klog.Infof("job %s/%s has been restarted at %v, will not restart again in %v", namespace, jobLabel, tv.Value(), r.restartDuration)
-			return
-		}
-		now := time.Now()
-		r.restarts.Set(key, now, r.restartDuration) // only restart once in 60 seconds
-		r.restartJob(context.Background(), namespace, jobLabel)
-		go func() {
-			<-time.After(r.restartDuration - time.Second)
-			r.restarts.Delete(key) //
-		}()
 	}
+
+	if pod.Spec.RestartPolicy == corev1.RestartPolicyNever {
+		klog.Warningf("pod %s/%s has RestartPolicyNever, will not restart", namespace, name)
+		return
+	}
+	key := fmt.Sprintf("%s/%s", namespace, jobLabel)
+	tv := r.restarts.Get(key)
+	if tv != nil {
+		klog.Infof("job %s/%s has been restarted at %v, will not restart again in %v", namespace, jobLabel, tv.Value(), r.restartDuration)
+		return
+	}
+	now := time.Now()
+	r.restarts.Set(key, now, r.restartDuration) // only restart once in 60 seconds
+	r.restartJob(context.Background(), namespace, jobLabel)
+	go func() {
+		<-time.After(r.restartDuration - time.Second)
+		r.restarts.Delete(key) //
+	}()
+
 }
 
-func (r *RecoveryController) restartJob(ctx context.Context, namespace, name string) {
+func (r *recoveryController) restartJob(ctx context.Context, namespace, name string) {
 	err := r.client.CoreV1().Pods(namespace).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("%s=%s", constants.KubeflowJobLabel, name),
 	})
@@ -91,7 +94,7 @@ type nsName struct {
 	name string
 }
 
-func (r *RecoveryController) onNodeError(name string) {
+func (r *recoveryController) onNodeError(name string) {
 	node, err := r.client.CoreV1().Nodes().Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("get node %s error: %v", name, err)
@@ -131,7 +134,7 @@ func (r *RecoveryController) onNodeError(name string) {
 	}
 }
 
-func (r *RecoveryController) onEvent(e events.CollectorEvent) {
+func (r *recoveryController) onEvent(e events.CollectorEvent) {
 	klog.Infof("recover controller received event: %+v", e)
 	switch e.TargetType {
 	case events.Pod:
@@ -145,18 +148,27 @@ func (r *RecoveryController) onEvent(e events.CollectorEvent) {
 	}
 }
 
-func (r *RecoveryController) Start() error {
+func (r *recoveryController) Start() error {
 	if r.eventReader == nil {
-		return fmt.Errorf("recorder is nil")
+		return fmt.Errorf("the event source is nil")
 	}
 	go func() {
-		for e := range r.eventReader.EventChan() {
-			r.onEvent(e)
+		for {
+			select {
+			case <-r.stop:
+				return // TODO: wait for eventReader finish?
+
+			case e := <-r.eventReader.EventChan():
+				r.onEvent(e)
+			}
 		}
+
 	}()
+
+	klog.Info("the recoveryController is started")
 	return nil
 }
 
-func (r *RecoveryController) Stop() {
+func (r *recoveryController) Stop() {
 	close(r.stop)
 }

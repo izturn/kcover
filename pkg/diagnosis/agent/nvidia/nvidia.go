@@ -1,36 +1,32 @@
-//go:build !nvidia
-
-package agent
+package nvidia
 
 import (
 	"time"
 
 	"github.com/baizeai/kcover/pkg/diagnosis"
 	"github.com/baizeai/kcover/pkg/events"
-	"github.com/baizeai/kcover/pkg/runner"
 
 	"k8s.io/klog/v2"
 )
 
-var _ runner.Runner = (*metaxDiag)(nil)
-var _ diagnosis.Diagnostic = (*metaxDiag)(nil)
+var _ diagnosis.Diagnostic = (*diag)(nil)
 
-type metaxDiag struct {
+type diag struct {
 	nodeName string
 	events   chan events.CollectorEvent
 	stop     chan struct{}
 }
 
-func NewDiagnosis(nodeName string) (diagnosis.Diagnostic, error) {
-	klog.Info("for vendor: metax")
-	return &metaxDiag{
+func NewDiagnosis(nodeName string) *diag {
+	klog.Info("for vendor: nvidia")
+	return &diag{
 		events:   make(chan events.CollectorEvent),
 		stop:     make(chan struct{}),
 		nodeName: nodeName,
-	}, nil
+	}
 }
 
-func (d *metaxDiag) Start() error {
+func (d *diag) Start() error {
 	go func() {
 		t := time.NewTicker(time.Second * 30)
 		defer t.Stop()
@@ -54,10 +50,16 @@ func (d *metaxDiag) Start() error {
 	return nil
 }
 
-func (d *metaxDiag) Stop() {
+func (d *diag) Stop() {
 	close(d.stop)
+	close(d.events)
 }
 
-func (d *metaxDiag) EventChan() <-chan events.CollectorEvent {
+func (d *diag) EventChan() <-chan events.CollectorEvent {
 	return d.events
+
+}
+
+func (d *diag) String() string {
+	return "Nvidia"
 }
