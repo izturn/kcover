@@ -19,12 +19,32 @@ import (
 	"k8s.io/klog/v2"
 )
 
-func main() {
-	hostName, err := os.Hostname()
+func mustHostName() string {
+	hn, err := os.Hostname()
 	if err != nil {
 		panic(err)
 	}
+	return hn
+}
+func lock(hostName string) *resourcelock.LeaseLock {
+	return &resourcelock.LeaseLock{
+		Client: coordinationv1client.NewForConfigOrDie(kube.GetK8sConfigConfigWithFile("", "")),
+		LeaseMeta: metav1.ObjectMeta{
+			Name: "kcover",
+			Namespace: func() string {
+				if bs, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+					return string(bs)
+				}
+				return "default"
+			}(),
+		},
+		LockConfig: resourcelock.ResourceLockConfig{
+			Identity: hostName,
+		},
+	}
+}
 
+func makeElectionCallback() (func(ctx context.Context), func()) {
 	cfg := kube.GetK8sConfigConfigWithFile("", "")
 	client := kubernetes.NewForConfigOrDie(cfg)
 
@@ -33,56 +53,48 @@ func main() {
 		recov    runner.Runner
 		diag     runner.Runner
 	)
-	leaderElectionConfig := leaderelection.LeaderElectionConfig{
-		Lock: &resourcelock.LeaseLock{
-			Client: coordinationv1client.NewForConfigOrDie(kube.GetK8sConfigConfigWithFile("", "")),
-			LeaseMeta: metav1.ObjectMeta{
-				Name: "kcover",
-				Namespace: func() string {
-					if bs, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
-						return string(bs)
-					}
-					return "default"
-				}(),
-			},
-			LockConfig: resourcelock.ResourceLockConfig{
-				Identity: hostName,
-			},
+
+	return func(context.Context) {
+			// 当前实例成为 leader 时，开始执行 controller 逻辑
+			var err error
+			eventBus = events.NewKubeEventsRecorder(client, true)
+			recov = recovery.NewRecoveryController(client, eventBus)
+			diag, err = controller.NewDiagnostic(client, eventBus)
+			if err != nil {
+				panic(err)
+			}
+			if err := recov.Start(); err != nil {
+				panic(err)
+			}
+			if err := diag.Start(); err != nil {
+				panic(err)
+			}
+			if err := eventBus.Start(); err != nil {
+				panic(err)
+			}
+
+			klog.Info("kcover is started")
 		},
+		func() {
+			recov.Stop()
+			diag.Stop()
+			eventBus.Stop()
+			klog.Info("kcover is stopped")
+		}
+}
+
+func main() {
+	started, stopped := makeElectionCallback()
+	leaderElectionConfig := leaderelection.LeaderElectionConfig{
+		Lock:            lock(mustHostName()),
 		ReleaseOnCancel: true,
 		LeaseDuration:   15 * time.Second,
 		RenewDeadline:   10 * time.Second,
 		RetryPeriod:     2 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(ctx context.Context) {
-				// 当前实例成为 leader 时，开始执行 controller 逻辑
-				var err error
-				eventBus = events.NewKubeEventsRecorder(client, true)
-				recov = recovery.NewRecoveryController(client, eventBus)
-				diag, err = controller.NewDiagnostic(client, eventBus)
-				if err != nil {
-					panic(err)
-				}
-				if err := recov.Start(); err != nil {
-					panic(err)
-				}
-				if err := diag.Start(); err != nil {
-					panic(err)
-				}
-				if err := eventBus.Start(); err != nil {
-					panic(err)
-				}
-
-				klog.Info("kcover is started")
-			},
-			OnStoppedLeading: func() {
-				recov.Stop()
-				diag.Stop()
-				eventBus.Stop()
-				klog.Info("kcover is stopped")
-			},
+			OnStartedLeading: started,
+			OnStoppedLeading: stopped,
 		},
 	}
-
 	leaderelection.RunOrDie(context.Background(), leaderElectionConfig)
 }
