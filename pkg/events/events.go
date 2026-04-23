@@ -2,12 +2,11 @@ package events
 
 import "github.com/baizeai/kcover/pkg/runner"
 
-type TargetType string
+type ResourceType string
 
 const (
-	Pod    TargetType = "pod"
-	Node   TargetType = "node"
-	Device TargetType = "device"
+	Pod  ResourceType = "pod"
+	Node ResourceType = "node"
 )
 
 type EventType int
@@ -18,8 +17,8 @@ const (
 	Warning
 )
 
-type CollectorEvent struct {
-	TargetType
+type Event struct {
+	ResourceType
 	Namespace string
 	Name      string
 
@@ -27,17 +26,17 @@ type CollectorEvent struct {
 	Message string
 }
 
-type Recorder interface {
+type Bridge interface {
 	runner.Runner
 
-	Writer
-	Reader
+	Sink
+	Stream
 }
 
-type Writer interface {
-	RecordEvent(e CollectorEvent) error
+type Sink interface {
+	RecordEvent(e Event) error
 }
 
-type Reader interface {
-	EventChan() <-chan CollectorEvent
+type Stream interface {
+	EventChan() <-chan Event
 }

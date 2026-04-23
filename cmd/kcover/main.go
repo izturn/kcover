@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/baizeai/kcover/pkg/diagnosis/controller"
+	"github.com/baizeai/kcover/pkg/diagnosis/pod"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
 	"github.com/baizeai/kcover/pkg/recovery"
@@ -13,13 +13,17 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	coordinationv1client "k8s.io/client-go/kubernetes/typed/coordination/v1"
+	coordv1 "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/klog/v2"
 )
 
 func mustHostName() string {
+	if nodeName := kube.NodeNameFromEnv(); nodeName != "" {
+		return nodeName
+	}
+
 	hn, err := os.Hostname()
 	if err != nil {
 		panic(err)
@@ -28,7 +32,7 @@ func mustHostName() string {
 }
 func lock(hostName string) *resourcelock.LeaseLock {
 	return &resourcelock.LeaseLock{
-		Client: coordinationv1client.NewForConfigOrDie(kube.GetK8sConfigConfigWithFile("", "")),
+		Client: coordv1.NewForConfigOrDie(kube.GetK8sConfigConfigWithFile("", "")),
 		LeaseMeta: metav1.ObjectMeta{
 			Name: "kcover",
 			Namespace: func() string {
@@ -49,17 +53,17 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 	client := kubernetes.NewForConfigOrDie(cfg)
 
 	var (
-		eventBus events.Recorder
-		recov    runner.Runner
-		diag     runner.Runner
+		recov  runner.Runner
+		diag   runner.Runner
+		bridge events.Bridge
 	)
 
 	return func(context.Context) {
 			// 当前实例成为 leader 时，开始执行 controller 逻辑
 			var err error
-			eventBus = events.NewKubeEventsRecorder(client, true)
-			recov = recovery.NewRecoveryController(client, eventBus)
-			diag, err = controller.NewDiagnostic(client, eventBus)
+			bridge = events.NewKubeEventBridge(client)
+			recov = recovery.NewRecoveryController(client, bridge)
+			diag, err = pod.NewDiagnostic(client, bridge)
 			if err != nil {
 				panic(err)
 			}
@@ -69,7 +73,7 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 			if err := diag.Start(); err != nil {
 				panic(err)
 			}
-			if err := eventBus.Start(); err != nil {
+			if err := bridge.Start(); err != nil {
 				panic(err)
 			}
 
@@ -78,7 +82,7 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 		func() {
 			recov.Stop()
 			diag.Stop()
-			eventBus.Stop()
+			bridge.Stop()
 			klog.Info("kcover is stopped")
 		}
 }

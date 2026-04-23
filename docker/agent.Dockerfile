@@ -13,7 +13,7 @@ ADD . .
 
 ARG TARGETARCH
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags "-s -w" -o kcover-agent ./cmd/collector-controller
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags "-s -w" -o kcover-agent ./cmd/agent
 
 # runner
 FROM m.daocloud.io/docker.io/ubuntu:22.04

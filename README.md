@@ -32,6 +32,12 @@ kubectl label pytorchjobs <job-name> kcover.io/cascading-recovery=true
 kubectl label pytorchjobs <job-name> kcover.io/need-recovery=true
 ```
 
+`kcover` and `agent` read the current node name from the `NODE_NAME`
+environment variable. Helm templates inject this automatically from
+`spec.nodeName`. The legacy `FAST_RECOVERY_NODE_NAME` variable is still read in
+code for backward compatibility during migration, but new deployments should use
+`NODE_NAME` only.
+
 ## Usage
 
 Once installed, `kcover` will automatically monitor the labeled resources for any signs of failures and perform recovery actions as specified in the configuration.

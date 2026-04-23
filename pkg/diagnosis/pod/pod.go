@@ -1,4 +1,4 @@
-package controller
+package pod
 
 import (
 	"fmt"
@@ -11,17 +11,17 @@ import (
 	"k8s.io/klog/v2"
 )
 
-var _ runner.Runner = (*controllerDiagnostic)(nil)
+var _ runner.Runner = (*diagnostic)(nil)
 
-type controllerDiagnostic struct {
+type diagnostic struct {
 	diagnostics []diagnosis.Diagnostic
-	writer      events.Writer
+	eventSink   events.Sink
 }
 
-// NewDiagnostic 创建由controller(kcover)所管理的诊断,目前只支持pod诊断
-func NewDiagnostic(cli kubernetes.Interface, w events.Writer) (runner.Runner, error) {
-	if w == nil {
-		return nil, fmt.Errorf("recorder can not be nil")
+// NewDiagnostic 创建由 pod 诊断管理的诊断器，目前只支持 Pod 诊断。
+func NewDiagnostic(cli kubernetes.Interface, sink events.Sink) (runner.Runner, error) {
+	if sink == nil {
+		return nil, fmt.Errorf("event sink can not be nil")
 	}
 
 	diags := make([]diagnosis.Diagnostic, 0)
@@ -33,12 +33,13 @@ func NewDiagnostic(cli kubernetes.Interface, w events.Writer) (runner.Runner, er
 
 	diags = append(diags, diagPodCollector) // 目前只支持针对pod的诊断
 
-	return &controllerDiagnostic{
+	return &diagnostic{
 		diagnostics: diags,
-		writer:      w,
+		eventSink:   sink,
 	}, nil
 }
-func (c *controllerDiagnostic) Start() error {
+
+func (c *diagnostic) Start() error {
 	for _, d := range c.diagnostics {
 		if err := d.Start(); err != nil {
 			return err
@@ -47,7 +48,7 @@ func (c *controllerDiagnostic) Start() error {
 	for _, d := range c.diagnostics {
 		go func() {
 			for e := range d.EventChan() {
-				err := c.writer.RecordEvent(e)
+				err := c.eventSink.RecordEvent(e)
 				if err != nil {
 					klog.Errorf("failed to record event of %T: %v", d, err)
 				}
@@ -55,11 +56,11 @@ func (c *controllerDiagnostic) Start() error {
 		}()
 	}
 
-	klog.Info("the controllerDiagnostic is started")
+	klog.Info("the pod diagnostic is started")
 	return nil
 }
 
-func (c *controllerDiagnostic) Stop() {
+func (c *diagnostic) Stop() {
 	for _, d := range c.diagnostics {
 		d.Stop()
 	}

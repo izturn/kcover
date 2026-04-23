@@ -7,5 +7,5 @@ import (
 
 type Diagnostic interface {
 	runner.Runner
-	events.Reader
+	events.Stream
 }

@@ -20,6 +20,9 @@ global:
   imageRegistry: ghcr.io
 
 agent:
+  interval: 5 #以秒为单位的诊断间隔
+  day2CheckHour: 10 #每天检查时间，24小时制，默认为10点
+
   image:
     registry: ''
     repository: baizeai/kcover-agent

@@ -7,6 +7,7 @@ import (
 
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
+	"github.com/baizeai/kcover/pkg/kube"
 
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/samber/lo"
@@ -18,17 +19,17 @@ import (
 
 type recoveryController struct {
 	client          kubernetes.Interface
-	eventReader     events.Reader
-	stop            chan struct{}
+	eventStream     events.Stream
+	stopCh          chan struct{}
 	restartDuration time.Duration
 	restarts        *ttlcache.Cache[string, time.Time]
 }
 
-func NewRecoveryController(cli kubernetes.Interface, r events.Reader) *recoveryController {
+func NewRecoveryController(cli kubernetes.Interface, stream events.Stream) *recoveryController {
 	return &recoveryController{
 		client:          cli,
-		eventReader:     r,
-		stop:            make(chan struct{}),
+		eventStream:     stream,
+		stopCh:          make(chan struct{}),
 		restartDuration: time.Second * 30,
 		restarts:        ttlcache.New[string, time.Time](),
 	}
@@ -94,6 +95,16 @@ type nsName struct {
 	name string
 }
 
+func (r *recoveryController) ensureNodeUnschedulable(name string) bool {
+	if err := kube.TaintNodeUnschedulable(context.Background(), r.client, name); err != nil {
+		klog.Errorf("ensure node %s is unschedulable error: %v", name, err)
+		return false
+	}
+
+	klog.Infof("ensured node %s is unschedulable and carries the no-schedule taint", name)
+	return true
+}
+
 func (r *recoveryController) onNodeError(name string) {
 	node, err := r.client.CoreV1().Nodes().Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
@@ -101,7 +112,7 @@ func (r *recoveryController) onNodeError(name string) {
 		return
 	}
 	if node.Spec.Unschedulable {
-		klog.Infof("the node %s status has been set to unschedulable", name)
+		r.ensureNodeUnschedulable(name)
 		return
 	}
 	// query jobs
@@ -127,16 +138,12 @@ func (r *recoveryController) onNodeError(name string) {
 	lo.ForEach(lo.Keys(jobs), func(item nsName, index int) {
 		r.onPodError(item.ns, item.name)
 	})
-	node.Spec.Unschedulable = true
-	_, err = r.client.CoreV1().Nodes().Update(context.Background(), node, metav1.UpdateOptions{})
-	if err != nil {
-		klog.Errorf("update node %s to unschedulable error: %v", name, err)
-	}
+	r.ensureNodeUnschedulable(name)
 }
 
-func (r *recoveryController) onEvent(e events.CollectorEvent) {
+func (r *recoveryController) onEvent(e events.Event) {
 	klog.Infof("recover controller received event: %+v", e)
-	switch e.TargetType {
+	switch e.ResourceType {
 	case events.Pod:
 		if e.EventType == events.Error {
 			r.onPodError(e.Namespace, e.Name)
@@ -144,21 +151,21 @@ func (r *recoveryController) onEvent(e events.CollectorEvent) {
 	case events.Node:
 		r.onNodeError(e.Name)
 	default:
-		klog.Errorf("unsupported target type: %s", e.TargetType)
+		klog.Errorf("unsupported target type: %s", e.ResourceType)
 	}
 }
 
 func (r *recoveryController) Start() error {
-	if r.eventReader == nil {
-		return fmt.Errorf("the event source is nil")
+	if r.eventStream == nil {
+		return fmt.Errorf("the event stream is nil")
 	}
 	go func() {
 		for {
 			select {
-			case <-r.stop:
-				return // TODO: wait for eventReader finish?
+			case <-r.stopCh:
+				return // TODO: wait for event stream finish?
 
-			case e := <-r.eventReader.EventChan():
+			case e := <-r.eventStream.EventChan():
 				r.onEvent(e)
 			}
 		}
@@ -170,5 +177,5 @@ func (r *recoveryController) Start() error {
 }
 
 func (r *recoveryController) Stop() {
-	close(r.stop)
+	close(r.stopCh)
 }
