@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/baizeai/kcover/pkg/diagnosis/pod"
+	"github.com/baizeai/kcover/pkg/detector/pod"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
 	"github.com/baizeai/kcover/pkg/recovery"
@@ -53,9 +53,9 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 	client := kubernetes.NewForConfigOrDie(cfg)
 
 	var (
-		recov  runner.Runner
-		diag   runner.Runner
-		bridge events.Bridge
+		recov       runner.Runner
+		podDetector runner.Runner
+		bridge      events.Bridge
 	)
 
 	return func(context.Context) {
@@ -63,14 +63,14 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 			var err error
 			bridge = events.NewKubeEventBridge(client)
 			recov = recovery.NewRecoveryController(client, bridge)
-			diag, err = pod.NewDiagnostic(client, bridge)
+			podDetector, err = pod.NewDetector(client, bridge)
 			if err != nil {
 				panic(err)
 			}
 			if err := recov.Start(); err != nil {
 				panic(err)
 			}
-			if err := diag.Start(); err != nil {
+			if err := podDetector.Start(); err != nil {
 				panic(err)
 			}
 			if err := bridge.Start(); err != nil {
@@ -81,7 +81,7 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 		},
 		func() {
 			recov.Stop()
-			diag.Stop()
+			podDetector.Stop()
 			bridge.Stop()
 			klog.Info("kcover is stopped")
 		}

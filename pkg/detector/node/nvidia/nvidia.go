@@ -3,24 +3,24 @@ package nvidia
 import (
 	"time"
 
-	"github.com/baizeai/kcover/pkg/diagnosis"
+	"github.com/baizeai/kcover/pkg/detector"
 	"github.com/baizeai/kcover/pkg/events"
 
 	"k8s.io/klog/v2"
 )
 
-var _ diagnosis.Diagnostic = (*diag)(nil)
+var _ detector.Detector = (*detectorImpl)(nil)
 
-type diag struct {
+type detectorImpl struct {
 	nodeName string
 	events   chan events.Event
 	stop     chan struct{}
 	interval int
 }
 
-func NewDiagnosis(nodeName string, interval int) *diag {
+func NewDetector(nodeName string, interval int) *detectorImpl {
 	klog.Info("for vendor: nvidia")
-	return &diag{
+	return &detectorImpl{
 		events:   make(chan events.Event),
 		stop:     make(chan struct{}),
 		nodeName: nodeName,
@@ -28,7 +28,7 @@ func NewDiagnosis(nodeName string, interval int) *diag {
 	}
 }
 
-func (d *diag) Start() error {
+func (d *detectorImpl) Start() error {
 	go func() {
 		t := time.NewTicker(time.Second * time.Duration(d.interval))
 		defer t.Stop()
@@ -52,16 +52,16 @@ func (d *diag) Start() error {
 	return nil
 }
 
-func (d *diag) Stop() {
+func (d *detectorImpl) Stop() {
 	close(d.stop)
 	close(d.events)
 }
 
-func (d *diag) EventChan() <-chan events.Event {
+func (d *detectorImpl) EventChan() <-chan events.Event {
 	return d.events
 
 }
 
-func (d *diag) String() string {
+func (d *detectorImpl) String() string {
 	return "Nvidia"
 }

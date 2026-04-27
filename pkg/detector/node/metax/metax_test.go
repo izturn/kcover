@@ -49,10 +49,10 @@ func TestNextCheckTimeAfterScheduledHour(t *testing.T) {
 
 }
 
-func TestNewDiagnosisKeepsIntervalAndHour(t *testing.T) {
+func TestNewDetectorKeepsIntervalAndHour(t *testing.T) {
 	t.Parallel()
 
-	diag := NewDiagnosis(kcoverconfig.MetaX{
+	instance := NewDetector(kcoverconfig.MetaX{
 		NodeName:           "node-a",
 		HCAIDs:             []string{"mlx5_0", "mlx5_1"},
 		GPUNum:             8,
@@ -61,29 +61,29 @@ func TestNewDiagnosisKeepsIntervalAndHour(t *testing.T) {
 		NTPMaxOffsetMillis: 10,
 		Day2CheckHour:      defaultCheckHour,
 	}, 5)
-	if diag.config.NodeName != "node-a" {
-		t.Fatalf("diag.config.NodeName = %q, want %q", diag.config.NodeName, "node-a")
+	if instance.config.NodeName != "node-a" {
+		t.Fatalf("instance.config.NodeName = %q, want %q", instance.config.NodeName, "node-a")
 	}
-	if !reflect.DeepEqual(diag.config.HCAIDs, []string{"mlx5_0", "mlx5_1"}) {
-		t.Fatalf("diag.config.HCAIDs = %v, want %v", diag.config.HCAIDs, []string{"mlx5_0", "mlx5_1"})
+	if !reflect.DeepEqual(instance.config.HCAIDs, []string{"mlx5_0", "mlx5_1"}) {
+		t.Fatalf("instance.config.HCAIDs = %v, want %v", instance.config.HCAIDs, []string{"mlx5_0", "mlx5_1"})
 	}
-	if diag.interval != 5 {
-		t.Fatalf("diag.interval = %d, want 5", diag.interval)
+	if instance.interval != 5 {
+		t.Fatalf("instance.interval = %d, want 5", instance.interval)
 	}
-	if diag.config.GPUNum != 8 {
-		t.Fatalf("diag.config.GPUNum = %d, want 8", diag.config.GPUNum)
+	if instance.config.GPUNum != 8 {
+		t.Fatalf("instance.config.GPUNum = %d, want 8", instance.config.GPUNum)
 	}
-	if diag.config.Temperature != 85 {
-		t.Fatalf("diag.config.Temperature = %d, want 85", diag.config.Temperature)
+	if instance.config.Temperature != 85 {
+		t.Fatalf("instance.config.Temperature = %d, want 85", instance.config.Temperature)
 	}
-	if diag.config.ECCMaxCount != 64 {
-		t.Fatalf("diag.config.ECCMaxCount = %d, want 64", diag.config.ECCMaxCount)
+	if instance.config.ECCMaxCount != 64 {
+		t.Fatalf("instance.config.ECCMaxCount = %d, want 64", instance.config.ECCMaxCount)
 	}
-	if diag.config.NTPMaxOffsetMillis != 10 {
-		t.Fatalf("diag.config.NTPMaxOffsetMillis = %v, want 10", diag.config.NTPMaxOffsetMillis)
+	if instance.config.NTPMaxOffsetMillis != 10 {
+		t.Fatalf("instance.config.NTPMaxOffsetMillis = %v, want 10", instance.config.NTPMaxOffsetMillis)
 	}
-	if diag.config.Day2CheckHour != defaultCheckHour {
-		t.Fatalf("diag.config.Day2CheckHour = %d, want %d", diag.config.Day2CheckHour, defaultCheckHour)
+	if instance.config.Day2CheckHour != defaultCheckHour {
+		t.Fatalf("instance.config.Day2CheckHour = %d, want %d", instance.config.Day2CheckHour, defaultCheckHour)
 	}
 }
 

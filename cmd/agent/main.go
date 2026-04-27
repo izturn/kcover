@@ -9,7 +9,7 @@ import (
 	"syscall"
 
 	"github.com/baizeai/kcover/cmd/agent/config"
-	"github.com/baizeai/kcover/pkg/diagnosis/node"
+	"github.com/baizeai/kcover/pkg/detector/node"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
 
@@ -54,23 +54,23 @@ func run() error {
 
 	sink := events.NewKubeEventSink(client)
 
-	nodeDiag, err := node.NewDiagnostic(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, sink)
+	nodeDetector, err := node.NewDetector(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, sink)
 	if err != nil {
-		return fmt.Errorf("create node diagnostic: %w", err)
+		return fmt.Errorf("create node detector: %w", err)
 	}
-	defer nodeDiag.Stop()
+	defer nodeDetector.Stop()
 
-	podWatcher, err := newPodWatcher(client, sink)
+	preflightObserver, err := newPreflightObserver(client, sink)
 	if err != nil {
-		return fmt.Errorf("create preflight pod watcher: %w", err)
+		return fmt.Errorf("create preflight pod observer: %w", err)
 	}
-	defer podWatcher.Stop()
+	defer preflightObserver.Stop()
 
-	if err := nodeDiag.Start(); err != nil {
-		return fmt.Errorf("start node diagnostic: %w", err)
+	if err := nodeDetector.Start(); err != nil {
+		return fmt.Errorf("start node detector: %w", err)
 	}
-	if err := podWatcher.Start(); err != nil {
-		return fmt.Errorf("start preflight pod watcher: %w", err)
+	if err := preflightObserver.Start(); err != nil {
+		return fmt.Errorf("start preflight pod observer: %w", err)
 	}
 
 	klog.Info("agent started")
