@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/baizeai/kcover/cmd/agent/config"
 	"github.com/baizeai/kcover/pkg/diagnosis/node"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
@@ -17,16 +18,8 @@ import (
 )
 
 var (
-	pVendor        = flag.Int("vendor", 1, "the gpu vendor: 1-metax 2-nvidia (default: 1)")
-	pInterval      = flag.Int("interval", 5, "diagnostic interval in seconds (default: 5s)")
-	pDay2CheckHour = flag.Int("day2-check-hour", 10, "daily day2 check hour in local time, 0-23 (default: 10)")
+	pConfigPath = flag.String("config", config.DefaultPath, "path to the agent config file")
 )
-
-type config struct {
-	vendor        node.Vendor
-	interval      int
-	day2CheckHour int
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -41,26 +34,19 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg := config{
-		vendor:        node.Vendor(*pVendor),
-		interval:      *pInterval,
-		day2CheckHour: *pDay2CheckHour,
-	}
-	if cfg.interval <= 0 {
-		cfg.interval = 5
-	}
-	if cfg.day2CheckHour < 0 || cfg.day2CheckHour > 23 {
-		cfg.day2CheckHour = 10
+	cfg, err := config.Load(*pConfigPath)
+	if err != nil {
+		return fmt.Errorf("load agent config: %w", err)
 	}
 
 	hostName, err := hostName()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve node name: %w", err)
 	}
 
 	k8sConfig := kube.GetK8sConfigConfigWithFile("", "")
 	if k8sConfig == nil {
-		return fmt.Errorf("kubernetes config is nil")
+		return fmt.Errorf("load kubernetes config: config is nil")
 	}
 
 	client, err := kubernetes.NewForConfig(k8sConfig)
@@ -70,7 +56,7 @@ func run() error {
 
 	sink := events.NewKubeEventSink(client)
 
-	diag, err := node.NewDiagnostic(hostName, cfg.vendor, cfg.interval, cfg.day2CheckHour, sink)
+	diag, err := node.NewDiagnostic(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, sink)
 	if err != nil {
 		return fmt.Errorf("create node diagnostic: %w", err)
 	}

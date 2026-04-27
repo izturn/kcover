@@ -3,6 +3,7 @@ package node
 import (
 	"fmt"
 
+	kcoverconfig "github.com/baizeai/kcover/cmd/agent/config"
 	"github.com/baizeai/kcover/pkg/diagnosis"
 	"github.com/baizeai/kcover/pkg/diagnosis/node/metax"
 	"github.com/baizeai/kcover/pkg/diagnosis/node/nvidia"
@@ -27,7 +28,7 @@ type diagnostic struct {
 	diagnostics []diagnosis.Diagnostic
 }
 
-func NewDiagnostic(nodeName string, vendor Vendor, interval int, checkHour int, sink events.Sink) (runner.Runner, error) {
+func NewDiagnostic(nodeName string, vendor Vendor, interval int, metaxConfig kcoverconfig.MetaX, sink events.Sink) (runner.Runner, error) {
 	if sink == nil {
 		return nil, fmt.Errorf("event sink can not be nil")
 	}
@@ -35,7 +36,8 @@ func NewDiagnostic(nodeName string, vendor Vendor, interval int, checkHour int, 
 	var d diagnosis.Diagnostic
 	switch vendor {
 	case MetaX:
-		d = metax.NewDiagnosis(nodeName, interval, checkHour)
+		metaxConfig.NodeName = nodeName
+		d = metax.NewDiagnosis(metaxConfig, interval)
 	case Nvidia:
 		d = nvidia.NewDiagnosis(nodeName, interval)
 	default:

@@ -13,9 +13,26 @@ image-%:
  		--platform linux/amd64,linux/arm64 \
  		.
 
-images: image-controller image-agent
+image-mx-smi:
+	$(CONTAINER_CLI) buildx build \
+		-t $(HUB)/mx-smi:v0.1 \
+		-f docker/mx-smi.Dockerfile \
+		--push \
+		--platform linux/amd64 \
+		.
 
-test: 
+image-agent:
+	$(CONTAINER_CLI) buildx build \
+		-t $(HUB)/kcover-agent:$(VERSION) \
+		-f docker/agent.Dockerfile \
+		--build-arg MX_SMI_IMAGE=$(HUB)/mx-smi:v0.1 \
+		--push \
+		--platform linux/amd64 \
+		.
+
+images: image-controller image-mx-smi image-agent
+
+test:
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-.PHONY: images
+.PHONY: images image-mx-smi image-agent

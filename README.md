@@ -38,6 +38,76 @@ environment variable. Helm templates inject this automatically from
 code for backward compatibility during migration, but new deployments should use
 `NODE_NAME` only.
 
+## Agent Config
+
+The agent supports loading its runtime configuration from a YAML file mounted
+from a ConfigMap. The Helm chart creates a default ConfigMap automatically, and
+you can also point the agent to an existing user-managed ConfigMap.
+
+The only runtime flag kept by the agent is `--config`, which points to the
+mounted configuration file. Business settings such as `interval`, `vendor`, and
+all `metaX` thresholds are now read from the config file only.
+
+Default chart-managed config:
+
+```yaml
+agent:
+  config:
+    data:
+      vendor: 1
+      interval: 5
+      metaX:
+        hcaIDs:
+          - mlx5_0
+          - mlx5_1
+        day2CheckHour: 10
+        gpuNum: 8
+        temperature: 85
+        eccMaxCount: 64
+        ntpMaxOffsetMillis: 10
+```
+
+If `metaX.hcaIDs` is set, the agent runs `ibv_devinfo` and requires every
+listed `hca_id` to have `state: PORT_ACTIVE (...)`.
+
+Use a user-defined ConfigMap:
+
+```yaml
+agent:
+  config:
+    existingConfigMap: my-agent-config
+    path: /etc/kcover-agent/config.yaml
+```
+
 ## Usage
 
 Once installed, `kcover` will automatically monitor the labeled resources for any signs of failures and perform recovery actions as specified in the configuration.
+
+## Image Build Notes
+
+The MetaX utility `mx-smi` is extracted into a dedicated image so that the
+agent image no longer needs to reference the full `maca-pytorch` runtime
+directly.
+
+- Extracted image: `release-ci.daocloud.io/baize/mx-smi:v0.1`
+- Agent base runtime: `ubuntu:24.04`
+- Agent build arg: `MX_SMI_IMAGE=release-ci.daocloud.io/baize/mx-smi:v0.1`
+
+Build and push the extracted `mx-smi` image:
+
+```shell
+make image-mx-smi
+```
+
+Build and push the agent image with the extracted `mx-smi` image injected:
+
+```shell
+make image-agent
+```
+
+If you need to build manually, use:
+
+```shell
+docker build -f docker/mx-smi.Dockerfile -t release-ci.daocloud.io/baize/mx-smi:v0.1 .
+docker build -f docker/agent.Dockerfile --build-arg MX_SMI_IMAGE=release-ci.daocloud.io/baize/mx-smi:v0.1 -t release-ci.daocloud.io/baize/kcover-agent:<tag> .
+```

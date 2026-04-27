@@ -32,8 +32,7 @@ spec:
           image: {{ template "agent.image" . }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           args:
-            - --interval={{ .Values.agent.interval }}
-            - --day2-check-hour={{ .Values.agent.day2CheckHour }}
+            - --config={{ .Values.agent.config.path }}
           env:
             # NODE_NAME is the canonical env var. FAST_RECOVERY_NODE_NAME remains
             # backward-compatible in code for older deployments during migration.
@@ -44,3 +43,17 @@ spec:
                   fieldPath: spec.nodeName
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: agent-config
+              mountPath: {{ dir .Values.agent.config.path }}
+              readOnly: true
+          {{- with .Values.agent.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: agent-config
+          configMap:
+            name: {{ include "kcover.agentConfigMapName" . }}
+        {{- with .Values.agent.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

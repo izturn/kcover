@@ -3,6 +3,7 @@ package node
 import (
 	"testing"
 
+	kcoverconfig "github.com/baizeai/kcover/cmd/agent/config"
 	"github.com/baizeai/kcover/pkg/events"
 )
 
@@ -15,7 +16,7 @@ func (stubSink) RecordEvent(events.Event) error {
 func TestNewDiagnosticRejectsNilSink(t *testing.T) {
 	t.Parallel()
 
-	if _, err := NewDiagnostic("node-a", MetaX, 5, 10, nil); err == nil {
+	if _, err := NewDiagnostic("node-a", MetaX, 5, kcoverconfig.MetaX{}, nil); err == nil {
 		t.Fatal("NewDiagnostic error = nil, want non-nil for nil sink")
 	}
 }
@@ -23,7 +24,7 @@ func TestNewDiagnosticRejectsNilSink(t *testing.T) {
 func TestNewDiagnosticRejectsUnknownVendor(t *testing.T) {
 	t.Parallel()
 
-	if _, err := NewDiagnostic("node-a", Vendor(99), 5, 10, stubSink{}); err == nil {
+	if _, err := NewDiagnostic("node-a", Vendor(99), 5, kcoverconfig.MetaX{}, stubSink{}); err == nil {
 		t.Fatal("NewDiagnostic error = nil, want non-nil for unknown vendor")
 	}
 }
@@ -31,7 +32,7 @@ func TestNewDiagnosticRejectsUnknownVendor(t *testing.T) {
 func TestNewDiagnosticReturnsRunner(t *testing.T) {
 	t.Parallel()
 
-	diag, err := NewDiagnostic("node-a", Nvidia, 5, 10, stubSink{})
+	diag, err := NewDiagnostic("node-a", Nvidia, 5, kcoverconfig.MetaX{}, stubSink{})
 	if err != nil {
 		t.Fatalf("NewDiagnostic returned error: %v", err)
 	}
