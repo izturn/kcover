@@ -54,20 +54,29 @@ func run() error {
 
 	sink := events.NewKubeEventSink(client)
 
-	diag, err := node.NewDiagnostic(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, sink)
+	nodeDiag, err := node.NewDiagnostic(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, sink)
 	if err != nil {
 		return fmt.Errorf("create node diagnostic: %w", err)
 	}
-	defer diag.Stop()
+	defer nodeDiag.Stop()
 
-	if err := diag.Start(); err != nil {
+	podWatcher, err := newPodWatcher(client, sink)
+	if err != nil {
+		return fmt.Errorf("create preflight pod watcher: %w", err)
+	}
+	defer podWatcher.Stop()
+
+	if err := nodeDiag.Start(); err != nil {
 		return fmt.Errorf("start node diagnostic: %w", err)
 	}
+	if err := podWatcher.Start(); err != nil {
+		return fmt.Errorf("start preflight pod watcher: %w", err)
+	}
 
-	klog.Info("the node agent is started")
+	klog.Info("agent started")
 	<-ctx.Done()
 
-	klog.Info("the node agent is stopped")
+	klog.Info("agent stopped")
 	return nil
 }
 

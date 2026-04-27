@@ -151,6 +151,7 @@ func (r *recoveryController) onNodeError(name string) {
 }
 
 func (r *recoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
+	// TODO: traner v2 & lws?
 	pods, err := r.client.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
 		LabelSelector: constants.KubeflowJobLabel,
 		FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),

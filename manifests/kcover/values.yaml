@@ -81,6 +81,10 @@ agent:
       hostPath:
         path: /dev/infiniband
         type: DirectoryOrCreate
+    - name: preflight-report
+      hostPath:
+        path: /var/lib/kcover/preflight
+        type: DirectoryOrCreate
   # - name: foo
   #   secret:
   #     secretName: mysecret
@@ -90,6 +94,8 @@ agent:
   volumeMounts:
     - name: infiniband
       mountPath: /dev/infiniband
+    - name: preflight-report
+      mountPath: /var/lib/kcover/preflight
   # - name: foo
   #   mountPath: "/etc/foo"
   #   readOnly: true

@@ -1,45 +1,61 @@
 package pod
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
-	"strings"
-	"time"
 
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/diagnosis"
 	"github.com/baizeai/kcover/pkg/events"
-	"github.com/baizeai/kcover/pkg/preflight"
+	"github.com/baizeai/kcover/pkg/kube"
 	"github.com/baizeai/kcover/pkg/runner"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
 
-var _ runner.Runner = (*podStatusCollector)(nil)
-var _ diagnosis.Diagnostic = (*podStatusCollector)(nil)
+var _ runner.Runner = (*diagnostic)(nil)
+var _ runner.Runner = (*diag)(nil)
+var _ diagnosis.Diagnostic = (*diag)(nil)
 
-const preflightLabel = "kcover.io/preflight"
+type diagnostic struct {
+	diagnostics []diagnosis.Diagnostic
+	eventSink   events.Sink
+}
 
-type podStatusCollector struct {
+// NewDiagnostic 创建由 pod 诊断管理的诊断器，目前只支持 Pod 诊断。
+func NewDiagnostic(cli kubernetes.Interface, sink events.Sink) (runner.Runner, error) {
+	if sink == nil {
+		return nil, fmt.Errorf("event sink can not be nil")
+	}
+
+	diag, err := newPodStatusDiagnosis(cli)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pod status collector: %w", err)
+	}
+
+	return &diagnostic{
+		diagnostics: []diagnosis.Diagnostic{diag},
+		eventSink:   sink,
+	}, nil
+}
+
+type diag struct {
 	client  kubernetes.Interface
 	eventCh chan events.Event
 	stopCh  chan struct{}
 }
 
-func newPodStatusCollector(cli kubernetes.Interface) (diagnosis.Diagnostic, error) {
-	return &podStatusCollector{
+func newPodStatusDiagnosis(cli kubernetes.Interface) (diagnosis.Diagnostic, error) {
+	return &diag{
 		client:  cli,
 		eventCh: make(chan events.Event),
 		stopCh:  make(chan struct{}),
 	}, nil
 }
 
-func (p *podStatusCollector) onPodUpdate(oldPod, newPod *corev1.Pod) {
+func (p *diag) onPodUpdate(oldPod, newPod *corev1.Pod) {
 	if !shouldCheckPodUpdate(oldPod, newPod) {
 		return
 	}
@@ -77,64 +93,12 @@ func containerEvents(pod *corev1.Pod) []events.Event {
 	return ee
 }
 
-func preflightEvents(pod *corev1.Pod) []events.Event {
-	ee := make([]events.Event, 0)
-	for _, cs := range pod.Status.InitContainerStatuses {
-		terminated := cs.State.Terminated
-		if terminated == nil || strings.TrimSpace(terminated.Message) == "" {
-			continue
-		}
-
-		var report preflight.Report
-		if err := json.Unmarshal([]byte(strings.TrimSpace(terminated.Message)), &report); err != nil {
-			continue
-		}
-
-		if report.Result == preflight.CheckResultFail {
-			ee = append(ee, events.Event{
-				ResourceType: events.Pod,
-				Namespace:    pod.Namespace,
-				Name:         pod.Name,
-				EventType:    events.Error,
-				Message:      fmt.Sprintf("init container %s preflight failed on node %s", cs.Name, pod.Spec.NodeName),
-			})
-		}
-
-		if report.Checks.NodeCheck == preflight.CheckResultFail && pod.Spec.NodeName != "" {
-			ee = append(ee, events.Event{
-				ResourceType: events.Node,
-				Name:         pod.Spec.NodeName,
-				EventType:    events.Error,
-				Message:      fmt.Sprintf("pod %s/%s init container %s reported node preflight failure", pod.Namespace, pod.Name, cs.Name),
-			})
-		}
-
-		for nodeName, result := range report.Checks.Network.Target {
-			if result != preflight.CheckResultFail {
-				continue
-			}
-
-			ee = append(ee, events.Event{
-				ResourceType: events.Node,
-				Name:         nodeName,
-				EventType:    events.Error,
-				Message:      fmt.Sprintf("pod %s/%s init container %s reported network preflight failure to node %s", pod.Namespace, pod.Name, cs.Name, nodeName),
-			})
-		}
-	}
-
-	return ee
-}
-
 func podEvents(pod *corev1.Pod) []events.Event {
 	if !shouldHandlePod(pod) {
 		return nil
 	}
 
-	ee := make([]events.Event, 0)
-	ee = append(ee, containerEvents(pod)...)
-	ee = append(ee, preflightEvents(pod)...)
-	return ee
+	return containerEvents(pod)
 }
 
 func shouldHandlePod(pod *corev1.Pod) bool {
@@ -142,25 +106,15 @@ func shouldHandlePod(pod *corev1.Pod) bool {
 		return false
 	}
 
-	return pod.Labels[constants.EnabledRecoveryLabel] != "" ||
-		pod.Labels[preflightLabel] != ""
+	return pod.Labels[constants.EnabledRecoveryLabel] != ""
 }
 
-func (p *podStatusCollector) Start() error {
-	factory := informers.NewSharedInformerFactory(p.client, time.Minute)
-	informer := factory.Core().V1().Pods().Informer()
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj any) {
-			newPod := obj.(*corev1.Pod)
+func (p *diag) Start() error {
+	err := kube.WatchPods(p.client, p.stopCh, kube.PodHandlerFuncs{
+		AddFunc: func(newPod *corev1.Pod) {
 			p.onPodUpdate(nil, newPod)
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			newPod := newObj.(*corev1.Pod)
-			oldPod := oldObj.(*corev1.Pod)
-			if newPod.ResourceVersion == oldPod.ResourceVersion {
-				return
-			}
-
+		UpdateFunc: func(oldPod, newPod *corev1.Pod) {
 			p.onPodUpdate(oldPod, newPod)
 		},
 	})
@@ -168,16 +122,41 @@ func (p *podStatusCollector) Start() error {
 		return err
 	}
 
-	go informer.Run(p.stopCh)
 	klog.Info("the podStatusCollector is started")
 	return nil
 }
 
-func (p *podStatusCollector) Stop() {
+func (p *diag) Stop() {
 	close(p.stopCh)
 	close(p.eventCh)
 }
 
-func (p *podStatusCollector) EventChan() <-chan events.Event {
+func (p *diag) EventChan() <-chan events.Event {
 	return p.eventCh
+}
+
+func (c *diagnostic) Start() error {
+	for _, d := range c.diagnostics {
+		if err := d.Start(); err != nil {
+			return err
+		}
+	}
+	for _, d := range c.diagnostics {
+		go func(diag diagnosis.Diagnostic) {
+			for event := range diag.EventChan() {
+				if err := c.eventSink.RecordEvent(event); err != nil {
+					klog.Errorf("failed to record event of %T: %v", diag, err)
+				}
+			}
+		}(d)
+	}
+
+	klog.Info("the pod diagnostic is started")
+	return nil
+}
+
+func (c *diagnostic) Stop() {
+	for _, d := range c.diagnostics {
+		d.Stop()
+	}
 }

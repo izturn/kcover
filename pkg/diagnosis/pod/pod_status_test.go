@@ -51,11 +51,6 @@ func TestShouldHandlePod(t *testing.T) {
 		t.Fatal("shouldHandlePod(recoveryPod) = false, want true")
 	}
 
-	preflightPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{preflightLabel: constants.True}}}
-	if !shouldHandlePod(preflightPod) {
-		t.Fatal("shouldHandlePod(preflightPod) = false, want true")
-	}
-
 	plainPod := &corev1.Pod{}
 	if shouldHandlePod(plainPod) {
 		t.Fatal("shouldHandlePod(plainPod) = true, want false")
@@ -70,76 +65,27 @@ func TestPodEvents(t *testing.T) {
 		t.Fatalf("len(podEvents(plainPod)) = %d, want 0", len(events))
 	}
 
-	preflightPod := &corev1.Pod{
+	recoveryPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "worker-0",
-			Labels:    map[string]string{preflightLabel: constants.True},
+			Labels:    map[string]string{constants.EnabledRecoveryLabel: constants.True},
 		},
-		Spec: corev1.PodSpec{NodeName: "node-a"},
 		Status: corev1.PodStatus{
-			InitContainerStatuses: []corev1.ContainerStatus{{
-				Name: "preflight",
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "main",
 				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
-					Message: `{"version":1,"result":2,"node_name":"node-a","check":{"storage":1,"gpu":1,"node_check":2,"network":{"result":2,"target":{"node-b":2}}}}`,
+					Reason:   "Error",
+					Message:  "boom",
+					ExitCode: 1,
 				}},
 			}},
 		},
 	}
 
-	collected := podEvents(preflightPod)
-	if len(collected) != 3 {
-		t.Fatalf("len(podEvents(preflightPod)) = %d, want 3", len(collected))
-	}
-}
-
-func TestCollectPreflightEvents(t *testing.T) {
-	t.Parallel()
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "worker-0",
-		},
-		Spec: corev1.PodSpec{NodeName: "node-a"},
-		Status: corev1.PodStatus{
-			InitContainerStatuses: []corev1.ContainerStatus{{
-				Name: "preflight",
-				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
-					Message: `{"version":1,"result":2,"node_name":"node-a","check":{"storage":1,"gpu":1,"node_check":2,"network":{"result":2,"target":{"node-b":2,"node-c":1}}}}`,
-				}},
-			}},
-		},
-	}
-
-	collectorEvents := preflightEvents(pod)
-	if len(collectorEvents) != 3 {
-		t.Fatalf("len(collectorEvents) = %d, want 3", len(collectorEvents))
-	}
-
-	assertEvent(t, collectorEvents[0], events.Pod, "default", "worker-0")
-	assertEvent(t, collectorEvents[1], events.Node, "", "node-a")
-	assertEvent(t, collectorEvents[2], events.Node, "", "node-b")
-	if collectorEvents[2].Message == "" {
-		t.Fatal("collectorEvents[2].Message = empty, want non-empty")
-	}
-}
-
-func TestCollectPreflightEventsIgnoresInvalidMessage(t *testing.T) {
-	t.Parallel()
-
-	pod := &corev1.Pod{
-		Status: corev1.PodStatus{
-			InitContainerStatuses: []corev1.ContainerStatus{{
-				Name:  "preflight",
-				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: "not json"}},
-			}},
-		},
-	}
-
-	collectorEvents := preflightEvents(pod)
-	if len(collectorEvents) != 0 {
-		t.Fatalf("len(collectorEvents) = %d, want 0", len(collectorEvents))
+	collected := podEvents(recoveryPod)
+	if len(collected) != 1 {
+		t.Fatalf("len(podEvents(recoveryPod)) = %d, want 1", len(collected))
 	}
 }
 
