@@ -17,9 +17,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-var (
-	pConfigPath = flag.String("config", config.DefaultPath, "path to the agent config file")
-)
+var pConfigPath = flag.String("config", config.DefaultPath, "path to the agent config file")
 
 func main() {
 	if err := run(); err != nil {

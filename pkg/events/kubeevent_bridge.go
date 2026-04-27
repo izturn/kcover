@@ -57,7 +57,7 @@ func (bridge *kubeEventBridge) handleK8sEventAdd(obj any) {
 		return
 	}
 
-	evt, ok := bridge.toCollectorEvent(event)
+	evt, ok := bridge.toInternalEvent(event)
 	if !ok {
 		return
 	}
@@ -79,7 +79,7 @@ func (bridge *kubeEventBridge) isExpiredEvent(event *corev1.Event, now time.Time
 	return false
 }
 
-func (bridge *kubeEventBridge) toCollectorEvent(event *corev1.Event) (Event, bool) {
+func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool) {
 	if event.Annotations[constants.NeedRecoveryAnnotation] != constants.True {
 		return Event{}, false
 	}

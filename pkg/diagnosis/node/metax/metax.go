@@ -75,13 +75,7 @@ func (d *diag) check() error {
 	if err != nil {
 		return err
 	}
-	err = hcaStateCheck(d.config.HCAIDs)
-	if err != nil {
-		return err
-	}
-
-	return nil
-
+	return hcaStateCheck(d.config.HCAIDs)
 }
 
 func nextCheckTime(now time.Time, hour int) time.Time {
