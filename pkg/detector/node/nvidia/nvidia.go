@@ -3,24 +3,24 @@ package nvidia
 import (
 	"time"
 
-	"github.com/baizeai/kcover/pkg/detector"
+	d "github.com/baizeai/kcover/pkg/detector"
 	"github.com/baizeai/kcover/pkg/events"
 
 	"k8s.io/klog/v2"
 )
 
-var _ detector.Detector = (*detectorImpl)(nil)
+var _ d.Detector = (*detector)(nil)
 
-type detectorImpl struct {
+type detector struct {
 	nodeName string
 	events   chan events.Event
 	stop     chan struct{}
 	interval int
 }
 
-func NewDetector(nodeName string, interval int) *detectorImpl {
+func NewDetector(nodeName string, interval int) *detector {
 	klog.Info("for vendor: nvidia")
-	return &detectorImpl{
+	return &detector{
 		events:   make(chan events.Event),
 		stop:     make(chan struct{}),
 		nodeName: nodeName,
@@ -28,7 +28,7 @@ func NewDetector(nodeName string, interval int) *detectorImpl {
 	}
 }
 
-func (d *detectorImpl) Start() error {
+func (d *detector) Start() error {
 	go func() {
 		t := time.NewTicker(time.Second * time.Duration(d.interval))
 		defer t.Stop()
@@ -52,16 +52,16 @@ func (d *detectorImpl) Start() error {
 	return nil
 }
 
-func (d *detectorImpl) Stop() {
+func (d *detector) Stop() {
 	close(d.stop)
 	close(d.events)
 }
 
-func (d *detectorImpl) EventChan() <-chan events.Event {
+func (d *detector) EventChan() <-chan events.Event {
 	return d.events
 
 }
 
-func (d *detectorImpl) String() string {
+func (d *detector) String() string {
 	return "Nvidia"
 }

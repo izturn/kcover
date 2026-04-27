@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/baizeai/kcover/cmd/agent/config"
-	"github.com/baizeai/kcover/pkg/detector"
+	d "github.com/baizeai/kcover/pkg/detector"
 	"github.com/baizeai/kcover/pkg/events"
 
 	"k8s.io/klog/v2"
@@ -23,18 +23,18 @@ var gpuPrefix = []byte("GPU#")
 const expectedGPUStatus = "Available"
 const defaultExpectedHCAState = "PORT_ACTIVE"
 
-var _ detector.Detector = (*detectorImpl)(nil)
+var _ d.Detector = (*detector)(nil)
 
-type detectorImpl struct {
+type detector struct {
 	eventCh  chan events.Event
 	stopCh   chan struct{}
 	interval int
 	config   config.MetaX
 }
 
-func NewDetector(cfg config.MetaX, interval int) *detectorImpl {
+func NewDetector(cfg config.MetaX, interval int) *detector {
 	klog.Info("for vendor: metax")
-	return &detectorImpl{
+	return &detector{
 		stopCh:   make(chan struct{}),
 		eventCh:  make(chan events.Event),
 		interval: interval,
@@ -42,7 +42,7 @@ func NewDetector(cfg config.MetaX, interval int) *detectorImpl {
 	}
 }
 
-func (d *detectorImpl) day2Check() {
+func (d *detector) day2Check() {
 	err := d.check()
 	if err == nil {
 		return
@@ -57,7 +57,7 @@ func (d *detectorImpl) day2Check() {
 	}
 }
 
-func (d *detectorImpl) check() error {
+func (d *detector) check() error {
 	err := gpuCheck(d.config.GPUNum)
 	if err != nil {
 		return err
@@ -87,7 +87,7 @@ func nextCheckTime(now time.Time, hour int) time.Time {
 	return next
 }
 
-func (d *detectorImpl) Start() error {
+func (d *detector) Start() error {
 	go func() {
 		ticker := time.NewTicker(time.Second * time.Duration(d.interval))
 		defer ticker.Stop()
@@ -111,16 +111,16 @@ func (d *detectorImpl) Start() error {
 	return nil
 }
 
-func (d *detectorImpl) Stop() {
+func (d *detector) Stop() {
 	close(d.stopCh)
 	close(d.eventCh)
 }
 
-func (d *detectorImpl) EventChan() <-chan events.Event {
+func (d *detector) EventChan() <-chan events.Event {
 	return d.eventCh
 }
 
-func (d *detectorImpl) String() string {
+func (d *detector) String() string {
 	return "MetaX"
 }
 
