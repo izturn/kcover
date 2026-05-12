@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
+	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
 )
 
@@ -14,55 +14,43 @@ func ReportPath(baseDir, namespace, podName string) string {
 }
 
 func LoadReportFile(baseDir, namespace, podName string) (Report, error) {
+	report, _, err := LoadReportPayload(baseDir, namespace, podName)
+	if err != nil {
+		return Report{}, err
+	}
+
+	return report, nil
+}
+
+func LoadReportPayload(baseDir, namespace, podName string) (Report, string, error) {
 	path := ReportPath(baseDir, namespace, podName)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Report{}, fmt.Errorf("read %s: %w", path, err)
+		return Report{}, "", fmt.Errorf("read %s: %w", path, err)
 	}
 
 	report, err := parseReport(string(data))
 	if err != nil {
-		return Report{}, fmt.Errorf("parse %s: %w", path, err)
+		return Report{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	return *report, nil
+	return *report, string(data), nil
 }
 
-// TODO: 将此函数构建成Report的方法
-func NodeEvents(namespace, podName string, report Report) []events.Event {
-	nodeEvents := make([]events.Event, 0)
-	seen := make(map[string]struct{})
-
-	if report.NodeName != "" {
-		nodeEvents = append(nodeEvents, events.Event{
-			ResourceType: events.Node,
-			Name:         report.NodeName,
-			EventType:    events.Error,
-			Message:      fmt.Sprintf("pod %s/%s preflight failed on node %s", namespace, podName, report.NodeName),
-		})
-		seen[report.NodeName] = struct{}{}
+func ReportDeliveryEvent(namespace, nodeName, jobName, reportText string) events.Event {
+	annotations := map[string]string{
+		constants.PreflightReportAnnotation: constants.True,
+	}
+	if jobName != "" {
+		annotations[constants.KubeflowJobLabel] = jobName
 	}
 
-	targets := make([]string, 0, len(report.Checks.Network.Target))
-	for nodeName, result := range report.Checks.Network.Target {
-		if nodeName == "" || result != CheckResultFail {
-			continue
-		}
-		if _, exists := seen[nodeName]; exists {
-			continue
-		}
-		targets = append(targets, nodeName)
+	return events.Event{
+		ResourceType: events.Node,
+		Namespace:    namespace,
+		Name:         nodeName,
+		Annotations:  annotations,
+		EventType:    events.Error,
+		Message:      reportText,
 	}
-	sort.Strings(targets)
-
-	for _, nodeName := range targets {
-		nodeEvents = append(nodeEvents, events.Event{
-			ResourceType: events.Node,
-			Name:         nodeName,
-			EventType:    events.Error,
-			Message:      fmt.Sprintf("pod %s/%s preflight reported network failure to node %s", namespace, podName, nodeName),
-		})
-	}
-
-	return nodeEvents
 }

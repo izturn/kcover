@@ -80,6 +80,22 @@ func (bridge *kubeEventBridge) isExpiredEvent(event *corev1.Event, now time.Time
 }
 
 func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool) {
+	if event.Annotations[constants.PreflightReportAnnotation] == constants.True {
+		obj := event.InvolvedObject
+		if obj.GroupVersionKind() != (schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}) {
+			return Event{}, false
+		}
+
+		return Event{
+			ResourceType: Node,
+			Namespace:    obj.Namespace,
+			Name:         obj.Name,
+			EventType:    Error,
+			Message:      event.Message,
+			Annotations:  copyAnnotations(event.Annotations),
+		}, true
+	}
+
 	if event.Annotations[constants.NeedRecoveryAnnotation] != constants.True {
 		return Event{}, false
 	}
@@ -104,6 +120,19 @@ func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool
 	default:
 		return Event{}, false
 	}
+}
+
+func copyAnnotations(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+
+	return dst
 }
 
 func (bridge *kubeEventBridge) Stop() {

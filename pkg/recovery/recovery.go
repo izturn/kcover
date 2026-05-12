@@ -8,6 +8,7 @@ import (
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
+	"github.com/baizeai/kcover/pkg/preflight"
 
 	"github.com/jellydator/ttlcache/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -16,25 +17,33 @@ import (
 	"k8s.io/klog/v2"
 )
 
-type recoveryController struct {
-	client          kubernetes.Interface
-	eventStream     events.Stream
-	stopCh          chan struct{}
-	restartDuration time.Duration
-	restarts        *ttlcache.Cache[string, time.Time]
+type RecoveryController struct {
+	client             kubernetes.Interface
+	eventStream        events.Stream
+	stopCh             chan struct{}
+	restartDuration    time.Duration
+	restarts           *ttlcache.Cache[string, time.Time]
+	preflightCollector *preflight.JobCollector
 }
 
-func NewRecoveryController(cli kubernetes.Interface, stream events.Stream) *recoveryController {
-	return &recoveryController{
-		client:          cli,
-		eventStream:     stream,
-		stopCh:          make(chan struct{}),
-		restartDuration: time.Second * 30,
-		restarts:        ttlcache.New[string, time.Time](),
+func NewController(cli kubernetes.Interface, stream events.Stream) *RecoveryController {
+	preflightConfig, err := preflight.LoadConfig(context.Background(), cli, kube.CurrentNamespace())
+	if err != nil {
+		klog.Warningf("load preflight config: %v; using defaults", err)
+		preflightConfig = preflight.DefaultConfig()
+	}
+
+	return &RecoveryController{
+		client:             cli,
+		eventStream:        stream,
+		stopCh:             make(chan struct{}),
+		restartDuration:    time.Second * 30,
+		restarts:           ttlcache.New[string, time.Time](),
+		preflightCollector: preflight.NewJobCollector(preflightConfig),
 	}
 }
 
-func (r *recoveryController) onPodError(namespace, name string) {
+func (r *RecoveryController) onPodError(namespace, name string) {
 	pod, err := r.client.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("get pod %s/%s: %v", namespace, name, err)
@@ -68,7 +77,7 @@ func (r *recoveryController) onPodError(namespace, name string) {
 	r.restartJob(context.Background(), namespace, jobLabel)
 }
 
-func (r *recoveryController) isRecoveryEnabledForPod(pod *corev1.Pod) (bool, error) {
+func (r *RecoveryController) isRecoveryEnabledForPod(pod *corev1.Pod) (bool, error) {
 	if pod.Labels[constants.EnabledRecoveryLabel] == constants.True {
 		return true, nil
 	}
@@ -81,7 +90,7 @@ func (r *recoveryController) isRecoveryEnabledForPod(pod *corev1.Pod) (bool, err
 	return labels[constants.EnabledRecoveryLabel] == constants.True, nil
 }
 
-func (r *recoveryController) allowJobRestart(namespace, jobLabel string) bool {
+func (r *RecoveryController) allowJobRestart(namespace, jobLabel string) bool {
 	key := fmt.Sprintf("%s/%s", namespace, jobLabel)
 	restartedAt := r.restarts.Get(key)
 	if restartedAt != nil {
@@ -99,7 +108,7 @@ func (r *recoveryController) allowJobRestart(namespace, jobLabel string) bool {
 	return true
 }
 
-func (r *recoveryController) restartJob(ctx context.Context, namespace, name string) {
+func (r *RecoveryController) restartJob(ctx context.Context, namespace, name string) {
 	err := r.client.CoreV1().Pods(namespace).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("%s=%s", constants.KubeflowJobLabel, name),
 	})
@@ -115,7 +124,7 @@ type nsName struct {
 	name string
 }
 
-func (r *recoveryController) ensureNodeUnschedulable(name string) bool {
+func (r *RecoveryController) ensureNodeUnschedulable(name string) bool {
 	if err := kube.TaintNodeUnschedulable(context.Background(), r.client, name); err != nil {
 		klog.Errorf("mark node %s unschedulable: %v", name, err)
 		return false
@@ -125,7 +134,7 @@ func (r *recoveryController) ensureNodeUnschedulable(name string) bool {
 	return true
 }
 
-func (r *recoveryController) onNodeError(name string) {
+func (r *RecoveryController) onNodeError(name string) {
 	node, err := r.client.CoreV1().Nodes().Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("get node %s: %v", name, err)
@@ -150,7 +159,7 @@ func (r *recoveryController) onNodeError(name string) {
 	r.ensureNodeUnschedulable(name)
 }
 
-func (r *recoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
+func (r *RecoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
 	// TODO: traner v2 & lws?
 	pods, err := r.client.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
 		LabelSelector: constants.KubeflowJobLabel,
@@ -178,7 +187,40 @@ func (r *recoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
 	return items, nil
 }
 
-func (r *recoveryController) onEvent(e events.Event) {
+func (r *RecoveryController) onPreflightReport(namespace string, e events.Event) {
+	if r.preflightCollector == nil {
+		klog.Warning("skip preflight report: collector is nil")
+		return
+	}
+
+	jobName := e.Annotations[constants.KubeflowJobLabel]
+	if jobName == "" {
+		klog.Warningf("skip preflight report %s/%s: missing %s", namespace, e.Name, constants.KubeflowJobLabel)
+		return
+	}
+
+	ready, badNodes, err := r.preflightCollector.Add(namespace, jobName, e.Message)
+	if err != nil {
+		klog.Errorf("aggregate preflight report for %s/%s: %v", namespace, jobName, err)
+		return
+	}
+
+	if !ready {
+		klog.Infof("received preflight report for %s/%s, waiting for more", namespace, jobName)
+		return
+	}
+
+	if len(badNodes) == 0 {
+		klog.Infof("preflight report for %s/%s finished without bad nodes", namespace, jobName)
+		return
+	}
+
+	for _, nodeName := range badNodes {
+		r.ensureNodeUnschedulable(nodeName)
+	}
+}
+
+func (r *RecoveryController) onEvent(e events.Event) {
 	klog.Infof("recovery controller received event: %+v", e)
 	switch e.ResourceType {
 	case events.Pod:
@@ -186,13 +228,17 @@ func (r *recoveryController) onEvent(e events.Event) {
 			r.onPodError(e.Namespace, e.Name)
 		}
 	case events.Node:
+		if e.Annotations[constants.PreflightReportAnnotation] == constants.True {
+			r.onPreflightReport(e.Namespace, e)
+			return
+		}
 		r.onNodeError(e.Name)
 	default:
 		klog.Errorf("unsupported event resource type: %s", e.ResourceType)
 	}
 }
 
-func (r *recoveryController) Start() error {
+func (r *RecoveryController) Start() error {
 	if r.eventStream == nil {
 		return fmt.Errorf("event stream is nil")
 	}
@@ -213,6 +259,6 @@ func (r *recoveryController) Start() error {
 	return nil
 }
 
-func (r *recoveryController) Stop() {
+func (r *RecoveryController) Stop() {
 	close(r.stopCh)
 }

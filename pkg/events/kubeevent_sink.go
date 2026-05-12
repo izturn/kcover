@@ -21,10 +21,6 @@ type kubeEventSink struct {
 	recorder record.EventRecorder
 }
 
-var recoveryEventAnnotations = map[string]string{
-	constants.NeedRecoveryAnnotation: constants.True,
-}
-
 func NewKubeEventSink(cli kubernetes.Interface) Sink {
 	return &kubeEventSink{
 		client:   cli,
@@ -65,8 +61,25 @@ func (sink *kubeEventSink) recordRecoveryEvent(obj runtime.Object, event Event) 
 		return err
 	}
 
-	sink.recorder.AnnotatedEventf(ref, recoveryEventAnnotations, corev1.EventTypeWarning, "Error", "%s", event.Message)
+	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, "Error", "%s", event.Message)
 	return nil
+}
+
+func annotationsForEvent(event Event) map[string]string {
+	annotations := make(map[string]string, len(event.Annotations)+1)
+	for key, value := range event.Annotations {
+		annotations[key] = value
+	}
+
+	if annotations[constants.PreflightReportAnnotation] == constants.True {
+		return annotations
+	}
+
+	if _, ok := annotations[constants.NeedRecoveryAnnotation]; !ok {
+		annotations[constants.NeedRecoveryAnnotation] = constants.True
+	}
+
+	return annotations
 }
 
 func (sink *kubeEventSink) RecordEvent(e Event) error {

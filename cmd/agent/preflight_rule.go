@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
@@ -38,13 +39,73 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 		return nil
 	}
 
-	report, err := preflight.LoadReportFile(r.baseDir, newPod.Namespace, newPod.Name)
-	if err != nil {
-		klog.Errorf("load preflight report for pod %s/%s: %v", newPod.Namespace, newPod.Name, err)
-		return nil
+	jobName := newPod.Labels[constants.KubeflowJobLabel]
+	candidates := reportNameCandidates(newPod, jobName)
+	for _, reportName := range candidates {
+		report, reportText, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
+		if err != nil {
+			klog.V(4).Infof("load preflight report %s/%s from %s: %v", newPod.Namespace, newPod.Name, reportName, err)
+			continue
+		}
+		if report.NodeName == "" {
+			klog.Errorf("preflight report %s/%s from %s has empty node_name", newPod.Namespace, newPod.Name, reportName)
+			continue
+		}
+
+		return []events.Event{preflight.ReportDeliveryEvent(newPod.Namespace, report.NodeName, jobName, reportText)}
 	}
 
-	return preflight.NodeEvents(newPod.Namespace, newPod.Name, report)
+	klog.Errorf("load preflight report for pod %s/%s from candidates %v is failed", newPod.Namespace, newPod.Name, candidates)
+	return nil
+}
+
+func reportNameCandidates(pod *corev1.Pod, jobName string) []string {
+	candidates := []string{pod.Name}
+
+	if rank, ok := petNodeRankFromPodName(pod.Name, jobName); ok {
+		candidates = append(candidates, fmt.Sprintf("%s-%s", jobName, rank))
+	}
+
+	unique := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		unique = append(unique, candidate)
+	}
+
+	return unique
+}
+
+func petNodeRankFromPodName(podName, jobName string) (string, bool) {
+	if podName == "" || jobName == "" {
+		return "", false
+	}
+
+	prefix := jobName + "-"
+	if !strings.HasPrefix(podName, prefix) {
+		return "", false
+	}
+
+	suffix := strings.TrimPrefix(podName, prefix)
+	index := strings.LastIndex(suffix, "-")
+	if index < 0 || index+1 >= len(suffix) {
+		return "", false
+	}
+
+	rank := suffix[index+1:]
+	for _, ch := range rank {
+		if ch < '0' || ch > '9' {
+			return "", false
+		}
+	}
+
+	return rank, true
 }
 
 func shouldHandlePodUpdate(oldPod, newPod *corev1.Pod) bool {

@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/baizeai/kcover/pkg/constants"
@@ -26,6 +27,40 @@ func TestNodeNameFromEnvFallsBackToLegacyName(t *testing.T) {
 
 	if got := NodeNameFromEnv(); got != "node-old" {
 		t.Fatalf("NodeNameFromEnv() = %q, want %q", got, "node-old")
+	}
+}
+
+func TestCurrentNamespaceFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+
+	originalPath := serviceAccountNamespacePath
+	serviceAccountNamespacePath = t.TempDir() + "/missing"
+	t.Cleanup(func() {
+		serviceAccountNamespacePath = originalPath
+	})
+
+	if got := CurrentNamespace(); got != "default" {
+		t.Fatalf("CurrentNamespace() = %q, want %q", got, "default")
+	}
+}
+
+func TestCurrentNamespaceReadsServiceAccountFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := dir + "/namespace"
+	if err := os.WriteFile(path, []byte("baize-system"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	originalPath := serviceAccountNamespacePath
+	serviceAccountNamespacePath = path
+	t.Cleanup(func() {
+		serviceAccountNamespacePath = originalPath
+	})
+
+	if got := CurrentNamespace(); got != "baize-system" {
+		t.Fatalf("CurrentNamespace() = %q, want %q", got, "baize-system")
 	}
 }
 

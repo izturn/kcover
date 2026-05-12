@@ -19,8 +19,9 @@ const (
 
 type Event struct {
 	ResourceType
-	Namespace string
-	Name      string
+	Namespace   string
+	Name        string
+	Annotations map[string]string
 
 	EventType
 	Message string

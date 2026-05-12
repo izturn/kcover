@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/baizeai/kcover/pkg/constants"
 
@@ -16,12 +17,24 @@ import (
 
 const UnschedulableNodeTaintKey = "node.kubernetes.io/unschedulable"
 
+var serviceAccountNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
 func NodeNameFromEnv() string {
 	if nodeName := os.Getenv(constants.NodeNameEnv); nodeName != "" {
 		return nodeName
 	}
 
 	return os.Getenv(constants.LegacyNodeNameEnv)
+}
+
+func CurrentNamespace() string {
+	if data, err := os.ReadFile(serviceAccountNamespacePath); err == nil {
+		if namespace := strings.TrimSpace(string(data)); namespace != "" {
+			return namespace
+		}
+	}
+
+	return "default"
 }
 
 func TaintNodeUnschedulable(ctx context.Context, cli kubernetes.Interface, nodeName string) error {

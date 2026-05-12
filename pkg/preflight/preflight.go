@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 )
 
 type Preflight struct {
@@ -33,10 +35,40 @@ func (p *Preflight) Parse(reports []string) error {
 
 // parseReport 解析单份 preflight JSON 报告。
 func parseReport(text string) (*Report, error) {
-	report := &Report{}
-	if err := json.Unmarshal([]byte(text), report); err != nil {
+	type reportWire struct {
+		Version   int         `json:"version"`
+		Workload  string      `json:"workload,omitempty"`
+		WorldSize any         `json:"world_size,omitempty"`
+		Rank      any         `json:"rank,omitempty"`
+		Result    CheckResult `json:"result"`
+		Checks    Check       `json:"check"`
+		NodeName  string      `json:"node_name,omitempty"`
+	}
+
+	wire := &reportWire{}
+	if err := json.Unmarshal([]byte(text), wire); err != nil {
 		return nil, fmt.Errorf("unmarshal preflight report is failed: %w", err)
 	}
+
+	worldSize, err := parseIntField(wire.WorldSize)
+	if err != nil && wire.WorldSize != nil {
+		return nil, fmt.Errorf("invalid world_size: %w", err)
+	}
+	rank, err := parseIntField(wire.Rank)
+	if err != nil && wire.Rank != nil {
+		return nil, fmt.Errorf("invalid rank: %w", err)
+	}
+
+	report := &Report{
+		Version:   wire.Version,
+		Workload:  wire.Workload,
+		WorldSize: worldSize,
+		Rank:      rank,
+		Result:    wire.Result,
+		Checks:    wire.Checks,
+		NodeName:  wire.NodeName,
+	}
+
 	if report.NodeName == "" {
 		return nil, errors.New("report node name is empty")
 	}
@@ -44,13 +76,44 @@ func parseReport(text string) (*Report, error) {
 	return report, nil
 }
 
+func parseIntField(value any) (int, error) {
+	switch v := value.(type) {
+	case nil:
+		return 0, nil
+	case float64:
+		return int(v), nil
+	case int:
+		return v, nil
+	case string:
+		if v == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, err
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("unsupported type %T", value)
+	}
+}
+
+// ParseReportText 解析单份 preflight JSON 报告。
+func ParseReportText(text string) (Report, error) {
+	report, err := parseReport(text)
+	if err != nil {
+		return Report{}, err
+	}
+
+	return *report, nil
+}
+
 // Report 汇总当前已加载的报告，返回整体结论以及可以明确归因的 bad 节点。
 //
 // 实现方式：
 //   - 先把本地检查失败的节点直接归因为 bad 节点。
 //   - 再反复应用“过滤已知坏节点后仍然对全部 peer 失败”的收敛规则。
-//   - 对剩余无法直接收敛的失败报告做纯网络归因。
-//   - 最终只返回能够稳定归因到节点侧的 bad 节点；方向性网络异常不会出现在 badNodes 中。
+//   - 不再对剩余网络失败做额外图求解，只返回能够直接收敛出的 bad 节点。
 func (p *Preflight) Report() (_ CheckResult, badNodes []string, err error) {
 	if len(p.reports) == 0 {
 		return CheckResultSkip, nil, errors.New("no reports loaded")
@@ -91,22 +154,6 @@ func (p *Preflight) Report() (_ CheckResult, badNodes []string, err error) {
 		for _, nodeName := range newBadNodes {
 			badNodeSet[nodeName] = struct{}{}
 		}
-	}
-
-	// 如果所有失败报告都已经被本地检查或前面的“全 target 失败”收敛规则解释，就不必再做网络归因。
-	if len(badNodeSet)+passed == len(p.reports) {
-		return CheckResultFail, sortedKeys(badNodeSet), nil
-	}
-
-	netCandidates = filterReports(netCandidates, badNodeSet)
-
-	diagnosis, err := diagnoseNetwork(netCandidates)
-	if err != nil {
-		return CheckResultFail, badNodes, fmt.Errorf("network report analysis failed: %w", err)
-	}
-
-	for _, nodeName := range diagnosis.badNodes {
-		badNodeSet[nodeName] = struct{}{}
 	}
 
 	return CheckResultFail, sortedKeys(badNodeSet), nil
@@ -200,4 +247,14 @@ func filterReports(reports []*Report, excluded map[string]struct{}) []*Report {
 	}
 
 	return filteredReports
+}
+
+func sortedKeys(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+
+	return result
 }

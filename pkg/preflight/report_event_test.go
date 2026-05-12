@@ -3,9 +3,9 @@ package preflight
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
+	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
 )
 
@@ -36,37 +36,29 @@ func TestLoadReportFile(t *testing.T) {
 	}
 }
 
-func TestNodeEvents(t *testing.T) {
-	t.Parallel()
-
-	collected := NodeEvents("default", "worker-0", Report{
-		NodeName: "node-a",
-		Checks: Check{
-			Network: Network{Target: map[string]CheckResult{
-				"node-c": CheckResultPass,
-				"node-b": CheckResultFail,
-			}},
-		},
-	})
-
-	if len(collected) != 2 {
-		t.Fatalf("len(NodeEvents(...)) = %d, want 2", len(collected))
-	}
-
-	want := []events.Event{
-		{ResourceType: events.Node, Name: "node-a", EventType: events.Error, Message: "pod default/worker-0 preflight failed on node node-a"},
-		{ResourceType: events.Node, Name: "node-b", EventType: events.Error, Message: "pod default/worker-0 preflight reported network failure to node node-b"},
-	}
-	if !reflect.DeepEqual(collected, want) {
-		t.Fatalf("NodeEvents(...) = %#v, want %#v", collected, want)
-	}
-}
-
 func TestReportPath(t *testing.T) {
 	t.Parallel()
 
 	path := ReportPath("/var/lib/kcover/preflight", "default", "worker-0")
 	if path != "/var/lib/kcover/preflight/default/worker-0.json" {
 		t.Fatalf("ReportPath(...) = %q, want %q", path, "/var/lib/kcover/preflight/default/worker-0.json")
+	}
+}
+
+func TestReportDeliveryEvent(t *testing.T) {
+	t.Parallel()
+
+	event := ReportDeliveryEvent("default", "node-a", "job-a", `{"version":1}`)
+	if event.ResourceType != events.Node {
+		t.Fatalf("event.ResourceType = %s, want %s", event.ResourceType, events.Node)
+	}
+	if event.Name != "node-a" {
+		t.Fatalf("event.Name = %q, want %q", event.Name, "node-a")
+	}
+	if event.Annotations[constants.PreflightReportAnnotation] != constants.True {
+		t.Fatalf("preflight annotation = %q, want %q", event.Annotations[constants.PreflightReportAnnotation], constants.True)
+	}
+	if event.Annotations[constants.KubeflowJobLabel] != "job-a" {
+		t.Fatalf("job annotation = %q, want %q", event.Annotations[constants.KubeflowJobLabel], "job-a")
 	}
 }
