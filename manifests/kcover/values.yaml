@@ -115,6 +115,8 @@ controller:
   imagePullSecrets: []
 
   replicas: 1
+  args:
+    - --preflight-report-collection-timeout=30m
   podAnnotations: {}
   podLabels: {}
   podSecurityContext: {}

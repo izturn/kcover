@@ -2,7 +2,10 @@ package recovery
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
@@ -13,7 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestPreflightEventRespectsSlowNodeScoreFromConfigMap(t *testing.T) {
+func TestPreflightEventRespectsSlowNodeThresholdFromConfigMap(t *testing.T) {
 	t.Parallel()
 
 	client := fake.NewSimpleClientset(
@@ -22,8 +25,8 @@ func TestPreflightEventRespectsSlowNodeScoreFromConfigMap(t *testing.T) {
 		&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: preflight.ConfigMapName, Namespace: "default"},
 			Data: map[string]string{
-				preflight.ConfigKeyBusBWThreshold: "5",
-				preflight.ConfigKeySlowNodeScore:  "2",
+				preflight.ConfigKeyBusBWThreshold:    "5",
+				preflight.ConfigKeySlowNodeThreshold: "2",
 			},
 		},
 	)
@@ -36,7 +39,7 @@ func TestPreflightEventRespectsSlowNodeScoreFromConfigMap(t *testing.T) {
 	assertNodeUnschedulable(t, client, "node-b", false)
 }
 
-func TestPreflightEventUsesDefaultSlowNodeScoreWhenConfigMapMissing(t *testing.T) {
+func TestPreflightEventUsesDefaultSlowNodeThresholdWhenConfigMapMissing(t *testing.T) {
 	t.Parallel()
 
 	client := fake.NewSimpleClientset(
@@ -50,6 +53,73 @@ func TestPreflightEventUsesDefaultSlowNodeScoreWhenConfigMapMissing(t *testing.T
 
 	assertNodeUnschedulable(t, client, "node-a", true)
 	assertNodeUnschedulable(t, client, "node-b", true)
+}
+
+func TestSweepExpiredPreflightReportsDropsIncompleteJob(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	controller := NewController(client, nil)
+	now := time.Unix(100, 0)
+	controller.slowNodeAggregator = preflight.NewSlowNodeAggregator(preflight.Settings{ReportCollectionTimeout: 10 * time.Second})
+	controller.slowNodeAggregator.SetNowForTest(func() time.Time { return now })
+
+	controller.onEvent(preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
+	if len(controller.slowNodeAggregator.ExpireStale()) != 0 {
+		t.Fatal("ExpireStale() returned errors before timeout, want none")
+	}
+
+	now = now.Add(11 * time.Second)
+	errs := controller.slowNodeAggregator.ExpireStale()
+	if len(errs) != 1 {
+		t.Fatalf("len(ExpireStale()) = %d, want 1", len(errs))
+	}
+	if errs[0].AnchorNodeName() != "node-a" {
+		t.Fatalf("errs[0].AnchorNodeName() = %q, want node-a", errs[0].AnchorNodeName())
+	}
+	if !strings.Contains(errs[0].Error(), "got 1/2 reports") {
+		t.Fatalf("ExpireStale error = %q, want report count detail", errs[0])
+	}
+
+	controller.onEvent(preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
+	assertNodeUnschedulable(t, client, "node-a", false)
+}
+
+func TestReportPreflightAggregationTimeoutRecordsWarningEvent(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	controller := NewController(client, nil)
+	recorded := &recordingSink{}
+	controller.eventSink = recorded
+	controller.reportPreflightAggregationTimeout(preflight.ReportCollectionTimeoutError{
+		Namespace:       "default",
+		JobName:         "job-a",
+		ReportedNodes:   []string{"node-a", "node-b"},
+		ReceivedReports: 2,
+		ExpectedReports: 16,
+		Timeout:         30 * time.Minute,
+	})
+
+	if len(recorded.events) != 1 {
+		t.Fatalf("len(recorded.events) = %d, want 1", len(recorded.events))
+	}
+	if recorded.events[0].Name != "node-a" {
+		t.Fatalf("recorded.events[0].Name = %q, want node-a", recorded.events[0].Name)
+	}
+	message := recorded.events[0].Message
+	if !strings.Contains(message, "job-a") || !strings.Contains(message, "2/16") {
+		t.Fatalf("warning event message = %q, want job/report summary", message)
+	}
+}
+
+type recordingSink struct {
+	events []events.Event
+}
+
+func (s *recordingSink) RecordEvent(event events.Event) error {
+	s.events = append(s.events, event)
+	return nil
 }
 
 func preflightEvent(namespace, nodeName, jobName, report string) events.Event {
@@ -83,17 +153,5 @@ func assertNodeUnschedulable(t *testing.T, client *fake.Clientset, nodeName stri
 }
 
 func itoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-
-	buf := [20]byte{}
-	index := len(buf)
-	for value > 0 {
-		index--
-		buf[index] = byte('0' + value%10)
-		value /= 10
-	}
-
-	return string(buf[index:])
+	return fmt.Sprintf("%d", value)
 }

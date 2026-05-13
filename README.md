@@ -83,6 +83,45 @@ agent:
 
 Once installed, `kcover` will automatically monitor the labeled resources for any signs of failures and perform recovery actions as specified in the configuration.
 
+## Preflight Slow Node Detection
+
+- The collector expects one preflight report per node.
+- When `world_size` is present in the report, each report must contain exactly
+  `world_size - 1` batches.
+- For the common 16-node topology, this usually means 16 reports and 15
+  batches per report, but this is a common case rather than a hardcoded rule.
+- If `world_size` is missing, the collector first tries configured expected
+  layout and otherwise infers the layout from the batch count in the report.
+- Slow-node scoring uses a single threshold setting. It accepts either an
+  absolute failed-batch count such as `8`, a ratio such as `0.5`, or a
+  percentage such as `50%`.
+- Agent-side node events carry a compacted preflight payload rather than the
+  raw host report. The compacted payload keeps only manager-required fields:
+  report identity plus per-batch `batch_idx`, `pair`, `self_ip`, and
+  `status`.
+- Incomplete report collections no longer wait forever. The controller expires
+  stale job aggregations after the controller flag
+  `--preflight-report-collection-timeout` and emits a warning event describing
+  how many reports were received.
+
+Supported `preflight-config` keys:
+
+```yaml
+data:
+  BUSBW_THRESHOLD_GBPS: "5"
+  SLOW_NODE_THRESHOLD: "50%"
+  EXPECTED_REPORTS: "16"
+  EXPECTED_BATCHES_PER_REPORT: "15"
+```
+
+Controller timeout example:
+
+```yaml
+controller:
+  args:
+    - --preflight-report-collection-timeout=30m
+```
+
 ## Image Build Notes
 
 The MetaX utility `mx-smi` is extracted into a dedicated image so that the

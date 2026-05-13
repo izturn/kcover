@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"time"
 
 	"github.com/baizeai/kcover/pkg/detector/pod"
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/kube"
+	"github.com/baizeai/kcover/pkg/preflight"
 	"github.com/baizeai/kcover/pkg/recovery"
 	"github.com/baizeai/kcover/pkg/runner"
 
@@ -17,6 +19,12 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/klog/v2"
+)
+
+var preflightReportCollectionTimeout = flag.Duration(
+	"preflight-report-collection-timeout",
+	preflight.DefaultReportCollectionTimeout,
+	"maximum time to wait for a complete set of preflight reports before expiring the partial aggregation",
 )
 
 func mustHostName() string {
@@ -43,7 +51,7 @@ func lock(hostName string) *resourcelock.LeaseLock {
 	}
 }
 
-func makeElectionCallback() (func(ctx context.Context), func()) {
+func makeElectionCallback(reportCollectionTimeout time.Duration) (func(ctx context.Context), func()) {
 	cfg := kube.GetK8sConfigConfigWithFile("", "")
 	client := kubernetes.NewForConfigOrDie(cfg)
 
@@ -57,7 +65,9 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 			// 当前实例成为 leader 时，开始执行 controller 逻辑
 			var err error
 			bridge = events.NewKubeEventBridge(client)
-			recov = recovery.NewController(client, bridge)
+			recov = recovery.NewController(client, bridge, recovery.ControllerOptions{
+				PreflightReportCollectionTimeout: reportCollectionTimeout,
+			})
 			detector, err = pod.NewDetector(client, bridge)
 			if err != nil {
 				panic(err)
@@ -83,7 +93,8 @@ func makeElectionCallback() (func(ctx context.Context), func()) {
 }
 
 func main() {
-	started, stopped := makeElectionCallback()
+	flag.Parse()
+	started, stopped := makeElectionCallback(*preflightReportCollectionTimeout)
 	leaderElectionConfig := leaderelection.LeaderElectionConfig{
 		Lock:            lock(mustHostName()),
 		ReleaseOnCancel: true,

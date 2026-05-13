@@ -174,10 +174,10 @@ func gpuStatusCountCheck(requiredCount int, statuses map[string]string, expected
 	}
 
 	if len(offenders) == 0 {
-		return fmt.Errorf("insufficient GPUs in status %q: expected at least %d, found %d", expectedStatus, requiredCount, count)
+		return fmt.Errorf("insufficient available GPUs: expected %d, found %d", requiredCount, count)
 	}
 
-	return fmt.Errorf("insufficient GPUs in status %q: expected at least %d, found %d: %s", expectedStatus, requiredCount, count, strings.Join(offenders, ", "))
+	return fmt.Errorf("insufficient available GPUs: expected %d, found %d: %s", requiredCount, count, strings.Join(offenders, ", "))
 }
 
 func parseGPUStatuses(text []byte, prefix []byte) (map[string]string, error) {
@@ -224,7 +224,7 @@ func hotspotTemperaturesExceedingLimit(temperatures map[string]float64, limit in
 	var offenders []string
 	maxTemperature := float64(limit)
 	for gpu, temperature := range temperatures {
-		if temperature > maxTemperature {
+		if temperature >= maxTemperature {
 			offenders = append(offenders, fmt.Sprintf("%s=%.2fC", gpu, temperature))
 		}
 	}

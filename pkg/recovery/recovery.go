@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,26 +21,65 @@ import (
 type RecoveryController struct {
 	client             kubernetes.Interface
 	eventStream        events.Stream
+	eventSink          events.Sink
 	stopCh             chan struct{}
 	restartDuration    time.Duration
 	restarts           *ttlcache.Cache[string, time.Time]
-	preflightCollector *preflight.JobCollector
+	slowNodeAggregator *preflight.SlowNodeAggregator
 }
 
-func NewController(cli kubernetes.Interface, stream events.Stream) *RecoveryController {
+type ControllerOptions struct {
+	PreflightReportCollectionTimeout time.Duration
+}
+
+func NewController(cli kubernetes.Interface, stream events.Stream, opts ...ControllerOptions) *RecoveryController {
 	preflightConfig, err := preflight.LoadConfig(context.Background(), cli, kube.CurrentNamespace())
 	if err != nil {
 		klog.Warningf("load preflight config: %v; using defaults", err)
 		preflightConfig = preflight.DefaultConfig()
 	}
+	if len(opts) > 0 && opts[0].PreflightReportCollectionTimeout > 0 {
+		preflightConfig.ReportCollectionTimeout = opts[0].PreflightReportCollectionTimeout
+	}
+	preflightConfig = preflightConfig.Normalize()
 
 	return &RecoveryController{
 		client:             cli,
 		eventStream:        stream,
+		eventSink:          events.NewKubeEventSink(cli),
 		stopCh:             make(chan struct{}),
 		restartDuration:    time.Second * 30,
 		restarts:           ttlcache.New[string, time.Time](),
-		preflightCollector: preflight.NewJobCollector(preflightConfig),
+		slowNodeAggregator: preflight.NewSlowNodeAggregator(preflightConfig),
+	}
+}
+
+func (r *RecoveryController) reportPreflightAggregationTimeout(timeoutErr preflight.ReportCollectionTimeoutError) {
+	if r.eventSink == nil {
+		return
+	}
+	anchorNode := timeoutErr.AnchorNodeName()
+	if anchorNode == "" {
+		klog.Warningf("skip warning event for expired preflight aggregation %s/%s: no reported nodes", timeoutErr.Namespace, timeoutErr.JobName)
+		return
+	}
+
+	message := fmt.Sprintf(
+		"preflight aggregation for job %s timed out after %s: received %d/%d reports; reported nodes=%v",
+		timeoutErr.JobName,
+		timeoutErr.Timeout,
+		timeoutErr.ReceivedReports,
+		timeoutErr.ExpectedReports,
+		timeoutErr.ReportedNodes,
+	)
+	if err := r.eventSink.RecordEvent(events.Event{
+		ResourceType: events.Node,
+		Namespace:    timeoutErr.Namespace,
+		Name:         anchorNode,
+		EventType:    events.Warning,
+		Message:      message,
+	}); err != nil {
+		klog.Errorf("record preflight aggregation timeout warning for %s/%s: %v", timeoutErr.Namespace, timeoutErr.JobName, err)
 	}
 }
 
@@ -188,7 +228,7 @@ func (r *RecoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
 }
 
 func (r *RecoveryController) onPreflightReport(namespace string, e events.Event) {
-	if r.preflightCollector == nil {
+	if r.slowNodeAggregator == nil {
 		klog.Warning("skip preflight report: collector is nil")
 		return
 	}
@@ -199,8 +239,13 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 		return
 	}
 
-	ready, badNodes, err := r.preflightCollector.Add(namespace, jobName, e.Message)
+	ready, slowNodes, err := r.slowNodeAggregator.AddReport(namespace, jobName, e.Message)
 	if err != nil {
+		var timeoutErr preflight.ReportCollectionTimeoutError
+		if errors.As(err, &timeoutErr) {
+			r.reportPreflightAggregationTimeout(timeoutErr)
+			klog.Errorf("expired stale preflight aggregation before processing %s/%s: %v", namespace, jobName, err)
+		}
 		klog.Errorf("aggregate preflight report for %s/%s: %v", namespace, jobName, err)
 		return
 	}
@@ -210,13 +255,23 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 		return
 	}
 
-	if len(badNodes) == 0 {
-		klog.Infof("preflight report for %s/%s finished without bad nodes", namespace, jobName)
+	if len(slowNodes) == 0 {
+		klog.Infof("preflight report for %s/%s finished without slow nodes", namespace, jobName)
 		return
 	}
 
-	for _, nodeName := range badNodes {
+	for _, nodeName := range slowNodes {
 		r.ensureNodeUnschedulable(nodeName)
+	}
+}
+
+func (r *RecoveryController) sweepExpiredPreflightReports() {
+	if r.slowNodeAggregator == nil {
+		return
+	}
+	for _, err := range r.slowNodeAggregator.ExpireStale() {
+		r.reportPreflightAggregationTimeout(err)
+		klog.Errorf("expire stale preflight aggregation: %v", err)
 	}
 }
 
@@ -243,10 +298,15 @@ func (r *RecoveryController) Start() error {
 		return fmt.Errorf("event stream is nil")
 	}
 	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-r.stopCh:
 				return // TODO: wait for event stream finish?
+
+			case <-ticker.C:
+				r.sweepExpiredPreflightReports()
 
 			case e := <-r.eventStream.EventChan():
 				r.onEvent(e)

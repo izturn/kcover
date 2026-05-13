@@ -35,6 +35,10 @@ spec:
         - name: controller
           image: {{ template "controller.image" . }}
           imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          {{- with .Values.controller.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             # NODE_NAME is the canonical env var. FAST_RECOVERY_NODE_NAME remains
             # backward-compatible in code for older deployments during migration.
