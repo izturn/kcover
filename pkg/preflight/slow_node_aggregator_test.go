@@ -12,7 +12,7 @@ import (
 func TestSlowNodeAggregatorDetectsSlowNodeFromScores(t *testing.T) {
 	t.Parallel()
 
-	aggregator := NewSlowNodeAggregator(Settings{BusBWThresholdGBPS: 100, SlowNodeThreshold: SlowNodeThreshold{Ratio: 0.75}})
+	aggregator := NewSlowNodeAggregator(Settings{BusBWThresholdGBPS: 100})
 
 	reports := []string{
 		`{"version":1,"workload":"job-a","world_size":"4","rank":"0","node_name":"node-a","result":2,"check":{"storage":2,"gpu":2,"node_check":2},"batches":[{"schema":"v3","batch_idx":0,"pair":["node-a","node-b"],"allreduce_ms":0.5,"world_size":16,"allreduce_shape":16777216,"dtype_bytes":4},{"schema":"v3","batch_idx":1,"pair":["node-a","node-c"],"status":"fail","rc":1},{"schema":"v3","batch_idx":2,"pair":["node-a","node-d"],"allreduce_ms":0.5,"world_size":16,"allreduce_shape":16777216,"dtype_bytes":4}]}`,
@@ -72,8 +72,8 @@ func TestSlowNodeAggregatorReturnsAllNodesMeetingDefaultThreshold(t *testing.T) 
 	if !ready {
 		t.Fatal("aggregator.AddReport(...) ready = false, want true")
 	}
-	if !reflect.DeepEqual(slowNodes, []string{"node-a", "node-b", "node-c", "node-d"}) {
-		t.Fatalf("aggregator.AddReport(...) slowNodes = %v, want [node-a node-b node-c node-d]", slowNodes)
+	if !reflect.DeepEqual(slowNodes, []string{"node-c"}) {
+		t.Fatalf("aggregator.AddReport(...) slowNodes = %v, want [node-c]", slowNodes)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestSlowNodeAggregatorRequiresCompleteReportMatrix(t *testing.T) {
 func TestSlowNodeAggregatorDetectsSlowNodeIn16NodeTopology(t *testing.T) {
 	t.Parallel()
 
-	aggregator := NewSlowNodeAggregator(Settings{BusBWThresholdGBPS: 100, SlowNodeThreshold: SlowNodeThreshold{Ratio: 0.5}})
+	aggregator := NewSlowNodeAggregator(Settings{BusBWThresholdGBPS: 100})
 	reports := roundRobinReports(16, map[string]struct{}{"node-03": {}})
 
 	for i := 0; i < len(reports)-1; i++ {
@@ -150,7 +150,7 @@ func TestSlowNodeAggregatorDetectsSlowNodeIn16NodeTopology(t *testing.T) {
 func TestSlowNodeAggregatorInfersLayoutWithoutWorldSize(t *testing.T) {
 	t.Parallel()
 
-	aggregator := NewSlowNodeAggregator(Settings{BusBWThresholdGBPS: 100, SlowNodeThreshold: SlowNodeThreshold{Ratio: 0.5}})
+	aggregator := NewSlowNodeAggregator(Settings{BusBWThresholdGBPS: 100})
 	reports := roundRobinReportsWithoutWorldSize(8, map[string]struct{}{"node-03": {}})
 
 	for i := 0; i < len(reports)-1; i++ {

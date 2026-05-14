@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 const (
 	DefaultPath                = "/etc/kcover-agent/config.yaml"
 	DefaultVendor              = 1
@@ -39,6 +41,20 @@ func DefaultAgent() Agent {
 			Day2CheckHour:      DefaultMetaXDay2CheckHour,
 		},
 	}
+}
+
+func (cfg Agent) String() string {
+	return fmt.Sprintf(
+		"vendor=%d intervalSeconds=%d metaX.day2CheckHour=%d metaX.gpuNum=%d metaX.temperature=%d metaX.eccMaxCount=%d metaX.ntpMaxOffsetMillis=%d metaX.hcaIDs=%v",
+		cfg.Vendor,
+		cfg.Interval,
+		cfg.MetaX.Day2CheckHour,
+		cfg.MetaX.GPUNum,
+		cfg.MetaX.Temperature,
+		cfg.MetaX.ECCMaxCount,
+		cfg.MetaX.NTPMaxOffsetMillis,
+		cfg.MetaX.HCAIDs,
+	)
 }
 
 func (cfg *Agent) ApplyDefaults() {

@@ -35,6 +35,10 @@ spec:
         - name: controller
           image: {{ template "controller.image" . }}
           imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          {{- with .Values.controller.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.controller.args }}
           args:
             {{- toYaml . | nindent 12 }}

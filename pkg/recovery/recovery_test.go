@@ -2,7 +2,7 @@ package recovery
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestPreflightEventRespectsSlowNodeThresholdFromConfigMap(t *testing.T) {
+func TestPreflightEventIgnoresConfiguredSlowNodeThreshold(t *testing.T) {
 	t.Parallel()
 
 	client := fake.NewSimpleClientset(
@@ -25,8 +25,8 @@ func TestPreflightEventRespectsSlowNodeThresholdFromConfigMap(t *testing.T) {
 		&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: preflight.ConfigMapName, Namespace: "default"},
 			Data: map[string]string{
-				preflight.ConfigKeyBusBWThreshold:    "5",
-				preflight.ConfigKeySlowNodeThreshold: "2",
+				preflight.ConfigKeyBusBWThreshold: "5",
+				"SLOW_NODE_THRESHOLD":             "2",
 			},
 		},
 	)
@@ -35,8 +35,8 @@ func TestPreflightEventRespectsSlowNodeThresholdFromConfigMap(t *testing.T) {
 	controller.onEvent(preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
 	controller.onEvent(preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
 
-	assertNodeUnschedulable(t, client, "node-a", false)
-	assertNodeUnschedulable(t, client, "node-b", false)
+	assertNodeUnschedulable(t, client, "node-a", true)
+	assertNodeUnschedulable(t, client, "node-b", true)
 }
 
 func TestPreflightEventUsesDefaultSlowNodeThresholdWhenConfigMapMissing(t *testing.T) {
@@ -137,7 +137,7 @@ func preflightEvent(namespace, nodeName, jobName, report string) events.Event {
 }
 
 func reportText(jobName string, worldSize, rank int, nodeName string) string {
-	return `{"version":1,"workload":"` + jobName + `","world_size":` + itoa(worldSize) + `,"rank":` + itoa(rank) + `,"node_name":"` + nodeName + `","result":2,"check":{"storage":2,"gpu":2,"node_check":2},"batches":[{"batch_idx":0,"pair":["node-a","node-b"],"status":"fail"}]}`
+	return `{"version":1,"workload":"` + jobName + `","world_size":` + strconv.Itoa(worldSize) + `,"rank":` + strconv.Itoa(rank) + `,"node_name":"` + nodeName + `","result":2,"check":{"storage":2,"gpu":2,"node_check":2},"batches":[{"batch_idx":0,"pair":["node-a","node-b"],"status":"fail"}]}`
 }
 
 func assertNodeUnschedulable(t *testing.T, client *fake.Clientset, nodeName string, want bool) {
@@ -150,8 +150,4 @@ func assertNodeUnschedulable(t *testing.T, client *fake.Clientset, nodeName stri
 	if node.Spec.Unschedulable != want {
 		t.Fatalf("node %s unschedulable = %v, want %v", nodeName, node.Spec.Unschedulable, want)
 	}
-}
-
-func itoa(value int) string {
-	return fmt.Sprintf("%d", value)
 }

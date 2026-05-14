@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/baizeai/kcover/pkg/constants"
+	"github.com/baizeai/kcover/pkg/kube"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,15 +54,34 @@ func (bridge *kubeEventBridge) handleK8sEventAdd(obj any) {
 		return
 	}
 
+	klog.V(4).Infof(
+		"kubeEventBridge received k8s event ns=%s name=%s involved=%s/%s reason=%s annotations=%v",
+		event.Namespace,
+		event.Name,
+		event.InvolvedObject.Kind,
+		event.InvolvedObject.Name,
+		event.Reason,
+		event.Annotations,
+	)
+
 	if bridge.isExpiredEvent(event, time.Now()) {
+		klog.V(4).Infof("kubeEventBridge dropped expired event ns=%s name=%s", event.Namespace, event.Name)
 		return
 	}
 
 	evt, ok := bridge.toInternalEvent(event)
 	if !ok {
+		klog.V(4).Infof("kubeEventBridge ignored non-recovery event ns=%s name=%s", event.Namespace, event.Name)
 		return
 	}
 
+	klog.V(4).Infof(
+		"kubeEventBridge forwarding internal event type=%s ns=%s name=%s eventType=%d",
+		evt.ResourceType,
+		evt.Namespace,
+		evt.Name,
+		evt.EventType,
+	)
 	bridge.eventCh <- evt
 }
 
@@ -72,7 +92,7 @@ func (bridge *kubeEventBridge) isExpiredEvent(event *corev1.Event, now time.Time
 	}
 
 	if eventTimestamp.Add(eventMaxAge).Before(now) {
-		klog.Infof("event %s is too old %s against %s, ignore it", event.Name, eventTimestamp.String(), now.String())
+		klog.V(2).Infof("event %s is too old %s against %s, ignore it", event.Name, eventTimestamp.String(), now.String())
 		return true
 	}
 
@@ -83,9 +103,16 @@ func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool
 	if event.Annotations[constants.PreflightReportAnnotation] == constants.True {
 		obj := event.InvolvedObject
 		if obj.GroupVersionKind() != (schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}) {
+			klog.V(2).Infof(
+				"ignore preflight event with unsupported involved object gvk=%s/%s kind=%s",
+				obj.APIVersion,
+				obj.Kind,
+				obj.Kind,
+			)
 			return Event{}, false
 		}
 
+		klog.V(4).Infof("parsed preflight node event from agent node=%s ns=%s", obj.Name, obj.Namespace)
 		return Event{
 			ResourceType: Node,
 			Namespace:    obj.Namespace,
@@ -97,6 +124,7 @@ func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool
 	}
 
 	if event.Annotations[constants.NeedRecoveryAnnotation] != constants.True {
+		klog.V(4).Infof("skip event without recovery annotation ns=%s name=%s", event.Namespace, event.Name)
 		return Event{}, false
 	}
 
@@ -111,13 +139,19 @@ func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool
 			Message:      event.Message,
 		}, true
 	case schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}:
+		if event.Namespace != kube.CurrentNamespace() {
+			klog.V(4).Infof("skip day2 node event outside runtime namespace eventNs=%s runtimeNs=%s node=%s", event.Namespace, kube.CurrentNamespace(), obj.Name)
+			return Event{}, false
+		}
 		return Event{
 			ResourceType: Node,
+			Namespace:    event.Namespace,
 			Name:         obj.Name,
 			EventType:    Error,
 			Message:      event.Message,
 		}, true
 	default:
+		klog.V(4).Infof("skip event with unsupported involved object kind=%s apiVersion=%s", obj.Kind, obj.APIVersion)
 		return Event{}, false
 	}
 }

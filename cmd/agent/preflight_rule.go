@@ -55,7 +55,7 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 		return []events.Event{preflight.ReportDeliveryEvent(newPod.Namespace, report.NodeName, jobName, reportText)}
 	}
 
-	klog.Errorf("load preflight report for pod %s/%s from candidates %v is failed", newPod.Namespace, newPod.Name, candidates)
+	klog.V(2).Infof("load preflight report for pod %s/%s from candidates %v is failed", newPod.Namespace, newPod.Name, candidates)
 	return nil
 }
 

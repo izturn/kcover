@@ -21,6 +21,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
+func init() {
+	klog.InitFlags(flag.CommandLine)
+}
+
 var preflightReportCollectionTimeout = flag.Duration(
 	"preflight-report-collection-timeout",
 	preflight.DefaultReportCollectionTimeout,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/baizeai/kcover/pkg/constants"
+	"github.com/baizeai/kcover/pkg/kube"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,6 +60,15 @@ func (sink *kubeEventSink) recordRecoveryEvent(obj runtime.Object, event Event) 
 	ref, err := reference.GetReference(scheme.Scheme, obj)
 	if err != nil {
 		return err
+	}
+
+	// Only day2 node events should be pinned to the agent runtime namespace.
+	if ref.Namespace == "" && event.ResourceType == Node && event.Annotations[constants.PreflightReportAnnotation] != constants.True {
+		ns := event.Namespace
+		if ns == "" {
+			ns = kube.CurrentNamespace()
+		}
+		ref.Namespace = ns
 	}
 
 	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, "Error", "%s", event.Message)

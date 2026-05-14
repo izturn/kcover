@@ -1,12 +1,15 @@
 # builder
-FROM --platform=$BUILDPLATFORM m.daocloud.io/docker.io/golang:1.23.2 as builder
+FROM --platform=$BUILDPLATFORM m.daocloud.io/docker.io/golang:1.23.2 AS builder
 
 WORKDIR /app
 
 COPY go.mod /app/go.mod
 COPY go.sum /app/go.sum
 
+ARG GOPROXY=https://goproxy.cn,direct
+
 RUN go env
+RUN go env -w GOPROXY=$GOPROXY
 RUN go env -w CGO_ENABLED=0
 RUN go mod download
 
@@ -22,4 +25,4 @@ WORKDIR /app
 
 COPY --from=builder /app/kcover-controller kcover-controller
 
-CMD /app/kcover-controller
+CMD ["/app/kcover-controller"]

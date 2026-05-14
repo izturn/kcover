@@ -92,9 +92,8 @@ Once installed, `kcover` will automatically monitor the labeled resources for an
   batches per report, but this is a common case rather than a hardcoded rule.
 - If `world_size` is missing, the collector first tries configured expected
   layout and otherwise infers the layout from the batch count in the report.
-- Slow-node scoring uses a single threshold setting. It accepts either an
-  absolute failed-batch count such as `8`, a ratio such as `0.5`, or a
-  percentage such as `50%`.
+- Slow-node scoring now uses a fixed threshold: a node is considered slow only
+  when it appears in failed observations for every batch it participates in.
 - Agent-side node events carry a compacted preflight payload rather than the
   raw host report. The compacted payload keeps only manager-required fields:
   report identity plus per-batch `batch_idx`, `pair`, `self_ip`, and
@@ -109,7 +108,6 @@ Supported `preflight-config` keys:
 ```yaml
 data:
   BUSBW_THRESHOLD_GBPS: "5"
-  SLOW_NODE_THRESHOLD: "50%"
   EXPECTED_REPORTS: "16"
   EXPECTED_BATCHES_PER_REPORT: "15"
 ```

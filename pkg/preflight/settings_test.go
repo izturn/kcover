@@ -17,7 +17,6 @@ func TestLoadConfigReadsConfigMap(t *testing.T) {
 		Data: map[string]string{
 			ConfigKeyNCCLIBHCA:         "mlx5_0,mlx5_1",
 			ConfigKeyBusBWThreshold:    "123.5",
-			ConfigKeySlowNodeThreshold: "50%",
 			ConfigKeyExpectedReports:   "16",
 			ConfigKeyExpectedBatches:   "15",
 		},
@@ -33,8 +32,8 @@ func TestLoadConfigReadsConfigMap(t *testing.T) {
 	if cfg.BusBWThresholdGBPS != 123.5 {
 		t.Fatalf("cfg.BusBWThresholdGBPS = %v, want %v", cfg.BusBWThresholdGBPS, 123.5)
 	}
-	if cfg.SlowNodeThreshold.Ratio != 0.5 {
-		t.Fatalf("cfg.SlowNodeThreshold.Ratio = %v, want %v", cfg.SlowNodeThreshold.Ratio, 0.5)
+	if cfg.SlowNodeThreshold.Ratio != 1 {
+		t.Fatalf("cfg.SlowNodeThreshold.Ratio = %v, want %v", cfg.SlowNodeThreshold.Ratio, 1)
 	}
 	if cfg.ExpectedReports != 16 {
 		t.Fatalf("cfg.ExpectedReports = %d, want %d", cfg.ExpectedReports, 16)
@@ -61,8 +60,8 @@ func TestLoadConfigDefaultsThresholdWhenMissing(t *testing.T) {
 	if cfg.BusBWThresholdGBPS != DefaultBusBWThresholdGBPS {
 		t.Fatalf("cfg.BusBWThresholdGBPS = %v, want %v", cfg.BusBWThresholdGBPS, DefaultBusBWThresholdGBPS)
 	}
-	if cfg.SlowNodeThreshold.MinimumBatches != DefaultSlowNodeThresholdBatches {
-		t.Fatalf("cfg.SlowNodeThreshold.MinimumBatches = %d, want %d", cfg.SlowNodeThreshold.MinimumBatches, DefaultSlowNodeThresholdBatches)
+	if cfg.SlowNodeThreshold.Ratio != 1 {
+		t.Fatalf("cfg.SlowNodeThreshold.Ratio = %v, want %v", cfg.SlowNodeThreshold.Ratio, 1)
 	}
 	if cfg.ExpectedReports != 0 {
 		t.Fatalf("cfg.ExpectedReports = %d, want %d", cfg.ExpectedReports, 0)
@@ -87,8 +86,8 @@ func TestLoadConfigDefaultsWhenConfigMapIsMissing(t *testing.T) {
 	if cfg.BusBWThresholdGBPS != DefaultBusBWThresholdGBPS {
 		t.Fatalf("cfg.BusBWThresholdGBPS = %v, want %v", cfg.BusBWThresholdGBPS, DefaultBusBWThresholdGBPS)
 	}
-	if cfg.SlowNodeThreshold.MinimumBatches != DefaultSlowNodeThresholdBatches {
-		t.Fatalf("cfg.SlowNodeThreshold.MinimumBatches = %d, want %d", cfg.SlowNodeThreshold.MinimumBatches, DefaultSlowNodeThresholdBatches)
+	if cfg.SlowNodeThreshold.Ratio != 1 {
+		t.Fatalf("cfg.SlowNodeThreshold.Ratio = %v, want %v", cfg.SlowNodeThreshold.Ratio, 1)
 	}
 	if cfg.ExpectedReports != 0 {
 		t.Fatalf("cfg.ExpectedReports = %d, want %d", cfg.ExpectedReports, 0)
@@ -118,27 +117,27 @@ func TestLoadConfigDefaultsForInvalidThreshold(t *testing.T) {
 	if cfg.BusBWThresholdGBPS != DefaultBusBWThresholdGBPS {
 		t.Fatalf("cfg.BusBWThresholdGBPS = %v, want %v", cfg.BusBWThresholdGBPS, DefaultBusBWThresholdGBPS)
 	}
-	if cfg.SlowNodeThreshold.MinimumBatches != DefaultSlowNodeThresholdBatches {
-		t.Fatalf("cfg.SlowNodeThreshold.MinimumBatches = %d, want %d", cfg.SlowNodeThreshold.MinimumBatches, DefaultSlowNodeThresholdBatches)
+	if cfg.SlowNodeThreshold.Ratio != 1 {
+		t.Fatalf("cfg.SlowNodeThreshold.Ratio = %v, want %v", cfg.SlowNodeThreshold.Ratio, 1)
 	}
 }
 
-func TestLoadConfigReturnsErrorForInvalidSlowNodeThreshold(t *testing.T) {
+func TestLoadConfigIgnoresConfiguredSlowNodeThreshold(t *testing.T) {
 	t.Parallel()
 
 	cli := fake.NewSimpleClientset(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: ConfigMapName, Namespace: "kcover-system"},
 		Data: map[string]string{
-			ConfigKeySlowNodeThreshold: "abc",
+			"SLOW_NODE_THRESHOLD": "abc",
 		},
 	})
 
 	cfg, err := LoadConfig(context.Background(), cli, "kcover-system")
-	if err == nil {
-		t.Fatal("LoadConfig() error = nil, want non-nil")
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if cfg.SlowNodeThreshold.MinimumBatches != DefaultSlowNodeThresholdBatches {
-		t.Fatalf("cfg.SlowNodeThreshold.MinimumBatches = %d, want %d", cfg.SlowNodeThreshold.MinimumBatches, DefaultSlowNodeThresholdBatches)
+	if cfg.SlowNodeThreshold.Ratio != 1 {
+		t.Fatalf("cfg.SlowNodeThreshold.Ratio = %v, want %v", cfg.SlowNodeThreshold.Ratio, 1)
 	}
 }
 
@@ -193,8 +192,8 @@ func TestMinimumFailedBatchesUsesThresholdRatio(t *testing.T) {
 	t.Parallel()
 
 	cfg := Settings{SlowNodeThreshold: SlowNodeThreshold{Ratio: 0.5}}
-	if got := cfg.MinimumFailedBatches(15); got != 8 {
-		t.Fatalf("cfg.MinimumFailedBatches(15) = %d, want %d", got, 8)
+	if got := cfg.MinimumFailedBatches(15); got != 15 {
+		t.Fatalf("cfg.MinimumFailedBatches(15) = %d, want %d", got, 15)
 	}
 }
 
@@ -202,27 +201,7 @@ func TestMinimumFailedBatchesUsesAbsoluteThreshold(t *testing.T) {
 	t.Parallel()
 
 	cfg := Settings{SlowNodeThreshold: SlowNodeThreshold{MinimumBatches: 3}}
-	if got := cfg.MinimumFailedBatches(15); got != 3 {
-		t.Fatalf("cfg.MinimumFailedBatches(15) = %d, want %d", got, 3)
-	}
-}
-
-func TestParseSlowNodeThresholdSupportsIntegerAndPercent(t *testing.T) {
-	t.Parallel()
-
-	count, err := parseSlowNodeThreshold("8")
-	if err != nil {
-		t.Fatalf("parseSlowNodeThreshold(8) error = %v", err)
-	}
-	if count.MinimumBatches != 8 {
-		t.Fatalf("count.MinimumBatches = %d, want %d", count.MinimumBatches, 8)
-	}
-
-	ratio, err := parseSlowNodeThreshold("50%")
-	if err != nil {
-		t.Fatalf("parseSlowNodeThreshold(50%%) error = %v", err)
-	}
-	if ratio.Ratio != 0.5 {
-		t.Fatalf("ratio.Ratio = %v, want %v", ratio.Ratio, 0.5)
+	if got := cfg.MinimumFailedBatches(15); got != 15 {
+		t.Fatalf("cfg.MinimumFailedBatches(15) = %d, want %d", got, 15)
 	}
 }

@@ -20,6 +20,12 @@ global:
   imageRegistry: ghcr.io
 
 agent:
+  # Additional CLI args for kcover-agent process (for example: ["-v=2"]).
+  # --config is always injected by the chart and does not need to be repeated here.
+  # Default to info-only logs; set -v=2/-v=4 for debug details.
+  args:
+    - -v=0
+
   config:
     existingConfigMap: "" # 留空时自动创建；设置后直接挂载用户自定义 ConfigMap
     path: /etc/kcover-agent/config.yaml
@@ -115,8 +121,18 @@ controller:
   imagePullSecrets: []
 
   replicas: 1
+  # Additional CLI args for kcover-controller process.
+  # Default keeps only essential info logs.
+  # Example for day2 debugging:
+  # args:
+  #   - -v=2
+  # If preflight aggregation is re-enabled in code, you can also set:
+  #   - --preflight-report-collection-timeout=30m
+  #   - -v=2
+  command:
+    - /app/kcover-controller
   args:
-    - --preflight-report-collection-timeout=30m
+    - -v=0
   podAnnotations: {}
   podLabels: {}
   podSecurityContext: {}

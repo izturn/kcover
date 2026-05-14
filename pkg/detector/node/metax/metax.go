@@ -33,7 +33,7 @@ type detector struct {
 }
 
 func NewDetector(cfg config.MetaX, interval int) *detector {
-	klog.Info("for vendor: metax")
+	klog.V(2).Info("for vendor: metax")
 	return &detector{
 		stopCh:   make(chan struct{}),
 		eventCh:  make(chan events.Event),
@@ -43,7 +43,7 @@ func NewDetector(cfg config.MetaX, interval int) *detector {
 }
 
 func (d *detector) day2Check() {
-	err := d.check()
+	err := d.check() // TODO: revert to check
 	if err == nil {
 		return
 	}
@@ -97,7 +97,7 @@ func (d *detector) Start() error {
 		for {
 			select {
 			case <-ticker.C:
-				d.check()
+				//d.day2Check()
 
 			case <-timer.C:
 				d.day2Check()
