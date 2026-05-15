@@ -22,6 +22,8 @@ type kubeEventSink struct {
 	recorder record.EventRecorder
 }
 
+const preflightEventReason = "PreflightReportAvailable"
+
 func NewKubeEventSink(cli kubernetes.Interface) Sink {
 	return &kubeEventSink{
 		client:   cli,
@@ -44,7 +46,7 @@ func (sink *kubeEventSink) recordToPod(e Event) error {
 		return err
 	}
 
-	return sink.recordRecoveryEvent(pod, e)
+	return sink.recordEvent(pod, e)
 }
 
 func (sink *kubeEventSink) recordToNode(e Event) error {
@@ -53,26 +55,73 @@ func (sink *kubeEventSink) recordToNode(e Event) error {
 		return err
 	}
 
-	return sink.recordRecoveryEvent(node, e)
+	return sink.recordEvent(node, e)
 }
 
-func (sink *kubeEventSink) recordRecoveryEvent(obj runtime.Object, event Event) error {
+func (sink *kubeEventSink) recordEvent(obj runtime.Object, event Event) error {
 	ref, err := reference.GetReference(scheme.Scheme, obj)
 	if err != nil {
 		return err
 	}
 
-	// Only day2 node events should be pinned to the agent runtime namespace.
-	if ref.Namespace == "" && event.ResourceType == Node && event.Annotations[constants.PreflightReportAnnotation] != constants.True {
-		ns := event.Namespace
-		if ns == "" {
-			ns = kube.CurrentNamespace()
-		}
-		ref.Namespace = ns
+	if isInternalPreflightEvent(event) {
+		return sink.recordPreflightEvent(ref, event)
 	}
 
+	fixEventNamespace(ref, event)
+	return sink.recordStdEvent(ref, event)
+}
+
+func fixEventNamespace(ref *corev1.ObjectReference, event Event) {
+	if ref == nil || ref.Namespace != "" || event.ResourceType != Node {
+		return
+	}
+
+	// Only day2 node events should be pinned to the agent runtime namespace.
+	ns := event.Namespace
+	if ns == "" {
+		ns = kube.CurrentNamespace()
+	}
+	ref.Namespace = ns
+}
+
+func (sink *kubeEventSink) recordStdEvent(ref *corev1.ObjectReference, event Event) error {
 	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, "Error", "%s", event.Message)
 	return nil
+}
+
+func (sink *kubeEventSink) recordPreflightEvent(ref *corev1.ObjectReference, event Event) error {
+	if ref == nil {
+		return fmt.Errorf("preflight event reference is nil")
+	}
+
+	evt := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "kcover-preflight-",
+			Namespace:    kube.CurrentNamespace(),
+			Annotations:  annotationsForEvent(event),
+		},
+		InvolvedObject: *ref,
+		Reason:         preflightEventReason,
+		Message:        preflightEventMessage(event),
+		Type:           corev1.EventTypeNormal,
+		Source:         corev1.EventSource{Component: "kcover"},
+	}
+	_, err := sink.client.CoreV1().Events(kube.CurrentNamespace()).Create(context.Background(), evt, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create preflight event for %s: %w", ref.Name, err)
+	}
+
+	return nil
+}
+
+func preflightEventMessage(event Event) string {
+	workload := event.Annotations[constants.PreflightWorkloadAnnotation]
+	if workload == "" {
+		return fmt.Sprintf("preflight report available for node %s", event.Name)
+	}
+
+	return fmt.Sprintf("preflight report available for workload %s on node %s", workload, event.Name)
 }
 
 func annotationsForEvent(event Event) map[string]string {
@@ -81,7 +130,9 @@ func annotationsForEvent(event Event) map[string]string {
 		annotations[key] = value
 	}
 
-	if annotations[constants.PreflightReportAnnotation] == constants.True {
+	if isInternalPreflightEvent(event) {
+		annotations[constants.PreflightNamespaceAnnotation] = event.Namespace
+		annotations[constants.PreflightPayloadAnnotation] = event.Message
 		return annotations
 	}
 
@@ -90,6 +141,14 @@ func annotationsForEvent(event Event) map[string]string {
 	}
 
 	return annotations
+}
+
+func isInternalPreflightEvent(event Event) bool {
+	return event.Annotations[constants.PreflightWorkloadAnnotation] != ""
+}
+
+func isPreflightEvent(annotations map[string]string) bool {
+	return annotations[constants.PreflightNamespaceAnnotation] != ""
 }
 
 func (sink *kubeEventSink) RecordEvent(e Event) error {

@@ -5,51 +5,41 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
 )
 
-func ReportPath(baseDir, namespace, podName string) string {
-	return filepath.Join(baseDir, namespace, podName+".json")
+func ReportPath(baseDir, namespace, reportName string) string {
+	return filepath.Join(baseDir, namespace, reportName+".json")
 }
 
-func LoadReportFile(baseDir, namespace, podName string) (Report, error) {
-	report, _, err := LoadReportPayload(baseDir, namespace, podName)
-	if err != nil {
-		return Report{}, err
-	}
-
-	return report, nil
-}
-
-func LoadReportPayload(baseDir, namespace, podName string) (Report, string, error) {
-	path := ReportPath(baseDir, namespace, podName)
+func LoadReportPayload(baseDir, namespace, reportName string) (string, string, error) {
+	path := ReportPath(baseDir, namespace, reportName)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Report{}, "", fmt.Errorf("read %s: %w", path, err)
+		return "", "", fmt.Errorf("read %s: %w", path, err)
 	}
 
-	payload, err := CompactReportPayload(string(data))
+	payload, nodeName, err := compactReport(string(data))
 	if err != nil {
-		return Report{}, "", fmt.Errorf("parse %s: %w", path, err)
+		return "", "", fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	report, err := parseReport(payload)
-	if err != nil {
-		return Report{}, "", fmt.Errorf("parse compacted %s: %w", path, err)
+	if nodeName == "" {
+		return "", "", fmt.Errorf("parse compacted %s: report node name is empty", path)
 	}
 
-	return *report, payload, nil
+	return payload, nodeName, nil
 }
 
-func ReportDeliveryEvent(namespace, nodeName, jobName, reportText string) events.Event {
-	annotations := map[string]string{
-		constants.PreflightReportAnnotation: constants.True,
+func ReportToEvent(namespace, nodeName, workloadName, reportText string) (events.Event, error) {
+	if workloadName == "" {
+		return events.Event{}, fmt.Errorf("preflight workload name is empty")
 	}
-	if jobName != "" {
-		annotations[constants.KubeflowJobLabel] = jobName
+
+	annotations := map[string]string{
+		constants.PreflightWorkloadAnnotation: workloadName,
 	}
 
 	return events.Event{
@@ -57,63 +47,67 @@ func ReportDeliveryEvent(namespace, nodeName, jobName, reportText string) events
 		Namespace:    namespace,
 		Name:         nodeName,
 		Annotations:  annotations,
-		EventType:    events.Error,
 		Message:      reportText,
-	}
+	}, nil
 }
 
-func CompactReportPayload(reportText string) (string, error) {
-	report, layout, observations, err := extractBatchObservations(reportText, DefaultConfig())
+func compactReport(reportText string) (string, string, error) {
+	report, err := parseReportText(reportText)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	type compactBatch struct {
-		BatchIdx int       `json:"batch_idx"`
-		Pair     [2]string `json:"pair"`
-		SelfIP   string    `json:"self_ip,omitempty"`
-		Status   string    `json:"status"`
-	}
-	type compactReport struct {
-		Version   int            `json:"version"`
-		Workload  string         `json:"workload,omitempty"`
-		WorldSize int            `json:"world_size,omitempty"`
-		Rank      int            `json:"rank,omitempty"`
-		Result    CheckResult    `json:"result"`
-		NodeName  string         `json:"node_name"`
-		Check     Check          `json:"check"`
-		Batches   []compactBatch `json:"batches"`
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(reportText), &raw); err != nil {
+		return "", "", fmt.Errorf("unmarshal preflight payload: %w", err)
 	}
 
-	batches := make([]compactBatch, 0, len(observations))
-	for _, observation := range observations {
-		status := "pass"
-		if observation.Failed {
-			status = "fail"
+	compact := map[string]any{
+		"workload_size": report.WorkloadSize,
+		"rank":          report.Rank,
+		"node_name":     report.NodeName,
+		"result":        report.Result,
+		"check":         report.Checks,
+	}
+	if threshold, ok := raw["node_check_busbw_threshold_gbps"]; ok {
+		compact["node_check_busbw_threshold_gbps"] = threshold
+	}
+
+	batchRaw, _ := raw["batches"].([]any)
+	batches := make([]map[string]any, 0, len(batchRaw))
+	for _, item := range batchRaw {
+		batch, ok := item.(map[string]any)
+		if !ok {
+			return "", "", fmt.Errorf("invalid batch payload type %T", item)
 		}
-		batches = append(batches, compactBatch{
-			BatchIdx: observation.BatchIdx,
-			Pair:     [2]string{observation.PairA, observation.PairB},
-			SelfIP:   observation.SelfID,
-			Status:   status,
-		})
-	}
 
-	compact := compactReport{
-		Version:   report.Version,
-		Workload:  strings.TrimSpace(report.Workload),
-		WorldSize: layout.reports,
-		Rank:      report.Rank,
-		Result:    report.Result,
-		NodeName:  report.NodeName,
-		Check:     report.Checks,
-		Batches:   batches,
+		compactedBatch := make(map[string]any, 8)
+		copyIfPresent(compactedBatch, batch, "batch_idx")
+		copyIfPresent(compactedBatch, batch, "pair")
+		copyIfPresent(compactedBatch, batch, "self_ip")
+		copyIfPresent(compactedBatch, batch, "local_rank")
+		copyIfPresent(compactedBatch, batch, "status")
+		copyIfPresent(compactedBatch, batch, "allreduce_ms")
+		copyIfPresent(compactedBatch, batch, "world_size")
+		copyIfPresent(compactedBatch, batch, "allreduce_shape")
+		copyIfPresent(compactedBatch, batch, "dtype_bytes")
+		batches = append(batches, compactedBatch)
 	}
+	compact["batches"] = batches
 
 	encoded, err := json.Marshal(compact)
 	if err != nil {
-		return "", fmt.Errorf("marshal compact preflight report: %w", err)
+		return "", "", fmt.Errorf("marshal compact preflight report: %w", err)
 	}
 
-	return string(encoded), nil
+	return string(encoded), report.NodeName, nil
+}
+
+func copyIfPresent(dst, src map[string]any, key string) {
+	value, ok := src[key]
+	if !ok {
+		return
+	}
+
+	dst[key] = value
 }

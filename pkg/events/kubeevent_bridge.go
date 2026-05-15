@@ -1,6 +1,8 @@
 package events
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/baizeai/kcover/pkg/constants"
@@ -33,7 +35,7 @@ func NewKubeEventBridge(cli kubernetes.Interface) Bridge {
 }
 
 func (bridge *kubeEventBridge) Start() error {
-	factory := informers.NewSharedInformerFactory(bridge.client, time.Minute)
+	factory := informers.NewSharedInformerFactory(bridge.client, 0)
 	informer := factory.Core().V1().Events().Informer()
 
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -100,7 +102,7 @@ func (bridge *kubeEventBridge) isExpiredEvent(event *corev1.Event, now time.Time
 }
 
 func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool) {
-	if event.Annotations[constants.PreflightReportAnnotation] == constants.True {
+	if isPreflightEvent(event.Annotations) {
 		obj := event.InvolvedObject
 		if obj.GroupVersionKind() != (schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}) {
 			klog.V(2).Infof(
@@ -112,13 +114,19 @@ func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool
 			return Event{}, false
 		}
 
+		payload, err := bridge.preflightPayloadForEvent(event)
+		if err != nil {
+			klog.Errorf("load preflight payload for node %s: %v", obj.Name, err)
+			return Event{}, false
+		}
+
 		klog.V(4).Infof("parsed preflight node event from agent node=%s ns=%s", obj.Name, obj.Namespace)
 		return Event{
 			ResourceType: Node,
-			Namespace:    obj.Namespace,
+			Namespace:    event.Annotations[constants.PreflightNamespaceAnnotation],
 			Name:         obj.Name,
 			EventType:    Error,
-			Message:      event.Message,
+			Message:      payload,
 			Annotations:  copyAnnotations(event.Annotations),
 		}, true
 	}
@@ -154,6 +162,22 @@ func (bridge *kubeEventBridge) toInternalEvent(event *corev1.Event) (Event, bool
 		klog.V(4).Infof("skip event with unsupported involved object kind=%s apiVersion=%s", obj.Kind, obj.APIVersion)
 		return Event{}, false
 	}
+}
+
+func (bridge *kubeEventBridge) preflightPayloadForEvent(event *corev1.Event) (string, error) {
+	if payload := event.Annotations[constants.PreflightPayloadAnnotation]; payload != "" {
+		return payload, nil
+	}
+
+	if looksLikeJSONPayload(event.Message) {
+		return event.Message, nil
+	}
+
+	return "", fmt.Errorf("preflight payload annotation %s is empty", constants.PreflightPayloadAnnotation)
+}
+
+func looksLikeJSONPayload(message string) bool {
+	return strings.HasPrefix(strings.TrimSpace(message), "{")
 }
 
 func copyAnnotations(src map[string]string) map[string]string {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/baizeai/kcover/pkg/constants"
@@ -15,7 +16,9 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// /var/lib/kcover/preflight/<namespace>/<JOB_NAME>-<PET_NODE_RANK>.json
 const preflightReportDir = "/var/lib/kcover/preflight"
+const preflightInitContainerName = "preflight"
 
 type preflightRule struct {
 	baseDir string
@@ -39,55 +42,90 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 		return nil
 	}
 
-	jobName := newPod.Labels[constants.KubeflowJobLabel]
-	candidates := reportNameCandidates(newPod, jobName)
-	for _, reportName := range candidates {
-		report, reportText, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
-		if err != nil {
-			klog.V(4).Infof("load preflight report %s/%s from %s: %v", newPod.Namespace, newPod.Name, reportName, err)
-			continue
-		}
-		if report.NodeName == "" {
-			klog.Errorf("preflight report %s/%s from %s has empty node_name", newPod.Namespace, newPod.Name, reportName)
-			continue
-		}
-
-		return []events.Event{preflight.ReportDeliveryEvent(newPod.Namespace, report.NodeName, jobName, reportText)}
+	workloadName := preflightWorkloadName(newPod)
+	reportName, ok := preflightReportName(newPod, workloadName)
+	if !ok {
+		klog.V(2).Infof("skip preflight report for pod %s/%s: can not derive report name from workload=%q", newPod.Namespace, newPod.Name, workloadName)
+		return nil
 	}
 
-	klog.V(2).Infof("load preflight report for pod %s/%s from candidates %v is failed", newPod.Namespace, newPod.Name, candidates)
-	return nil
+	reportText, nodeName, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
+	if err != nil {
+		klog.V(2).Infof("load preflight report %s/%s from %s: %v", newPod.Namespace, newPod.Name, reportName, err)
+		return nil
+	}
+	if nodeName == "" {
+		klog.Errorf("preflight report %s/%s from %s has empty node_name", newPod.Namespace, newPod.Name, reportName)
+		return nil
+	}
+
+	event, err := preflight.ReportToEvent(newPod.Namespace, nodeName, workloadName, reportText)
+	if err != nil {
+		klog.Errorf("build preflight delivery event for %s/%s from %s: %v", newPod.Namespace, newPod.Name, reportName, err)
+		return nil
+	}
+
+	return []events.Event{event}
 }
 
-func reportNameCandidates(pod *corev1.Pod, jobName string) []string {
-	candidates := []string{pod.Name}
-
-	if rank, ok := petNodeRankFromPodName(pod.Name, jobName); ok {
-		candidates = append(candidates, fmt.Sprintf("%s-%s", jobName, rank))
+func preflightWorkloadName(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
 	}
 
-	unique := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, exists := seen[candidate]; exists {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		unique = append(unique, candidate)
+	labels := pod.Labels
+	if labels == nil {
+		return ""
+	}
+	if name := labels[constants.LeaderWorkerSetNameLabel]; name != "" {
+		return name
 	}
 
-	return unique
+	return labels[constants.BatchJobNameLabel]
 }
 
-func petNodeRankFromPodName(podName, jobName string) (string, bool) {
-	if podName == "" || jobName == "" {
+func preflightReportName(pod *corev1.Pod, workloadName string) (string, bool) {
+	if pod == nil || pod.Name == "" || workloadName == "" {
 		return "", false
 	}
 
-	prefix := jobName + "-"
+	rank, ok := preflightRank(pod, workloadName)
+	if !ok {
+		return "", false
+	}
+
+	return fmt.Sprintf("%s-%s", workloadName, rank), true
+}
+
+func preflightRank(pod *corev1.Pod, workloadName string) (string, bool) {
+	if pod == nil || workloadName == "" {
+		return "", false
+	}
+
+	labels := pod.Labels
+	if labels[constants.LeaderWorkerSetNameLabel] != "" {
+		// TODO: derive LWS rank from authoritative workload metadata when available.
+		return petNodeRankFromPodName(pod.Name, workloadName)
+	}
+
+	annotations := pod.Annotations
+	raw := strings.TrimSpace(annotations[constants.BatchJobCompletionIndexAnnotation])
+	if raw == "" {
+		return "", false
+	}
+	if _, err := strconv.Atoi(raw); err != nil {
+		return "", false
+	}
+
+	return raw, true
+}
+
+func petNodeRankFromPodName(podName, workloadName string) (string, bool) {
+	if podName == "" || workloadName == "" {
+		return "", false
+	}
+
+	prefix := workloadName + "-"
 	if !strings.HasPrefix(podName, prefix) {
 		return "", false
 	}
@@ -113,30 +151,35 @@ func shouldHandlePodUpdate(oldPod, newPod *corev1.Pod) bool {
 		return false
 	}
 
-	return hasNewFailedInitContainer(oldPod.Status.InitContainerStatuses, newPod.Status.InitContainerStatuses)
+	return isPreflightFailed(oldPod.Status.InitContainerStatuses, newPod.Status.InitContainerStatuses)
 }
 
-func hasNewFailedInitContainer(oldStatuses, newStatuses []corev1.ContainerStatus) bool {
-	oldFailed := make(map[string]struct{}, len(oldStatuses))
-	for _, status := range oldStatuses {
-		if initContainerFailed(status) {
-			oldFailed[status.Name] = struct{}{}
-		}
+// isPreflightFailed returns true only when the init container named "preflight"
+// transitions from non-failed (or missing) to failed on this update.
+func isPreflightFailed(oldStatuses, newStatuses []corev1.ContainerStatus) bool {
+	newStatus, ok := initContainerStatusByName(newStatuses, preflightInitContainerName)
+	if !ok || !initContainerFailed(newStatus) {
+		return false
 	}
 
-	for _, status := range newStatuses {
-		if !initContainerFailed(status) {
-			continue
-		}
-		if _, exists := oldFailed[status.Name]; exists {
-			continue
-		}
+	oldStatus, ok := initContainerStatusByName(oldStatuses, preflightInitContainerName)
+	if !ok {
 		return true
 	}
 
-	return false
+	return !initContainerFailed(oldStatus)
 }
 
 func initContainerFailed(status corev1.ContainerStatus) bool {
 	return status.State.Terminated != nil && status.State.Terminated.ExitCode != 0
+}
+
+func initContainerStatusByName(statuses []corev1.ContainerStatus, name string) (corev1.ContainerStatus, bool) {
+	for _, status := range statuses {
+		if status.Name == name {
+			return status, true
+		}
+	}
+
+	return corev1.ContainerStatus{}, false
 }

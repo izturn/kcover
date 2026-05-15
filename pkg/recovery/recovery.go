@@ -32,25 +32,17 @@ type ControllerOptions struct {
 	PreflightReportCollectionTimeout time.Duration
 }
 
-// TODO: Re-enable after preflight rollout validation is completed.
-const preflightFeatureEnabled = false
-
 func NewController(cli kubernetes.Interface, stream events.Stream, opts ...ControllerOptions) *RecoveryController {
-	var aggregator *preflight.SlowNodeAggregator
-	if preflightFeatureEnabled {
-		preflightConfig, err := preflight.LoadConfig(context.Background(), cli, kube.CurrentNamespace())
-		if err != nil {
-			klog.Warningf("load preflight config: %v; using defaults", err)
-			preflightConfig = preflight.DefaultConfig()
-		}
-		if len(opts) > 0 && opts[0].PreflightReportCollectionTimeout > 0 {
-			preflightConfig.ReportCollectionTimeout = opts[0].PreflightReportCollectionTimeout
-		}
-		preflightConfig = preflightConfig.Normalize()
-		aggregator = preflight.NewSlowNodeAggregator(preflightConfig)
-	} else {
-		klog.Info("preflight feature is temporarily disabled")
+	preflightConfig, err := preflight.LoadConfig(context.Background(), cli, kube.CurrentNamespace())
+	if err != nil {
+		klog.Warningf("load preflight config: %v; using defaults", err)
+		preflightConfig = preflight.DefaultConfig()
 	}
+	if len(opts) > 0 && opts[0].PreflightReportCollectionTimeout > 0 {
+		preflightConfig.ReportCollectionTimeout = opts[0].PreflightReportCollectionTimeout
+	}
+	preflightConfig = preflightConfig.Normalize()
+	aggregator := preflight.NewSlowNodeAggregator(preflightConfig)
 
 	return &RecoveryController{
 		client:             cli,
@@ -252,9 +244,9 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 		return
 	}
 
-	jobName := e.Annotations[constants.KubeflowJobLabel]
+	jobName := e.Annotations[constants.PreflightWorkloadAnnotation]
 	if jobName == "" {
-		klog.V(2).Infof("skip preflight report %s/%s: missing %s", namespace, e.Name, constants.KubeflowJobLabel)
+		klog.V(2).Infof("skip preflight report %s/%s: missing %s", namespace, e.Name, constants.PreflightWorkloadAnnotation)
 		return
 	}
 
@@ -304,11 +296,7 @@ func (r *RecoveryController) onEvent(e events.Event) {
 			r.onPodError(e.Namespace, e.Name)
 		}
 	case events.Node:
-		if e.Annotations[constants.PreflightReportAnnotation] == constants.True {
-			if !preflightFeatureEnabled {
-				klog.V(2).Infof("ignore preflight event for node %s: preflight feature is disabled", e.Name)
-				return
-			}
+		if e.Annotations[constants.PreflightNamespaceAnnotation] != "" {
 			klog.V(2).Infof("dispatch event to preflight aggregator ns=%s node=%s", e.Namespace, e.Name)
 			r.onPreflightReport(e.Namespace, e)
 			return

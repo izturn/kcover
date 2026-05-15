@@ -7,26 +7,31 @@ import (
 	"strconv"
 )
 
-// parseReport 解析单份 preflight JSON 报告。
-func parseReport(text string) (*Report, error) {
-	type reportWire struct {
-		Version   int         `json:"version"`
-		Workload  string      `json:"workload,omitempty"`
-		WorldSize any         `json:"world_size,omitempty"`
-		Rank      any         `json:"rank,omitempty"`
-		Result    CheckResult `json:"result"`
-		Checks    Check       `json:"check"`
-		NodeName  string      `json:"node_name,omitempty"`
-	}
+type reportWire struct {
+	Version         int         `json:"version"`
+	WorkloadSize    any         `json:"workload_size,omitempty"`
+	LegacyWorldSize any         `json:"world_size,omitempty"`
+	Rank            any         `json:"rank,omitempty"`
+	Result          CheckResult `json:"result"`
+	Checks          Check       `json:"check"`
+	NodeName        string      `json:"node_name,omitempty"`
+}
 
+func parseReport(text string) (*Report, error) {
 	wire := &reportWire{}
 	if err := json.Unmarshal([]byte(text), wire); err != nil {
 		return nil, fmt.Errorf("unmarshal preflight report is failed: %w", err)
 	}
 
-	worldSize, err := parseIntField(wire.WorldSize)
-	if err != nil && wire.WorldSize != nil {
-		return nil, fmt.Errorf("invalid world_size: %w", err)
+	workloadSizeSource := wire.WorkloadSize
+	workloadSizeFieldName := "workload_size"
+	if workloadSizeSource == nil {
+		workloadSizeSource = wire.LegacyWorldSize
+		workloadSizeFieldName = "world_size"
+	}
+	workloadSize, err := parseIntField(workloadSizeSource)
+	if err != nil && workloadSizeSource != nil {
+		return nil, fmt.Errorf("invalid %s: %w", workloadSizeFieldName, err)
 	}
 	rank, err := parseIntField(wire.Rank)
 	if err != nil && wire.Rank != nil {
@@ -34,13 +39,12 @@ func parseReport(text string) (*Report, error) {
 	}
 
 	report := &Report{
-		Version:   wire.Version,
-		Workload:  wire.Workload,
-		WorldSize: worldSize,
-		Rank:      rank,
-		Result:    wire.Result,
-		Checks:    wire.Checks,
-		NodeName:  wire.NodeName,
+		Version:      wire.Version,
+		WorkloadSize: workloadSize,
+		Rank:         rank,
+		Result:       wire.Result,
+		Checks:       wire.Checks,
+		NodeName:     wire.NodeName,
 	}
 
 	if report.NodeName == "" {
@@ -72,8 +76,8 @@ func parseIntField(value any) (int, error) {
 	}
 }
 
-// ParseReportText 解析单份 preflight JSON 报告。
-func ParseReportText(text string) (Report, error) {
+// parseReportText 解析单份 preflight JSON 报告。
+func parseReportText(text string) (Report, error) {
 	report, err := parseReport(text)
 	if err != nil {
 		return Report{}, err

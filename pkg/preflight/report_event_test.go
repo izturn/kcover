@@ -10,7 +10,7 @@ import (
 	"github.com/baizeai/kcover/pkg/events"
 )
 
-func TestLoadReportFile(t *testing.T) {
+func TestLoadReportPayloadReturnsNodeName(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
@@ -24,16 +24,15 @@ func TestLoadReportFile(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	report, err := LoadReportFile(baseDir, "default", "worker-0")
+	payload, nodeName, err := LoadReportPayload(baseDir, "default", "worker-0")
 	if err != nil {
-		t.Fatalf("LoadReportFile() error = %v", err)
+		t.Fatalf("LoadReportPayload() error = %v", err)
 	}
-
-	if report.NodeName != "node-a" {
-		t.Fatalf("report.NodeName = %q, want %q", report.NodeName, "node-a")
+	if nodeName != "node-a" {
+		t.Fatalf("nodeName = %q, want %q", nodeName, "node-a")
 	}
-	if report.Checks.Network.Target["node-b"] != CheckResultFail {
-		t.Fatalf("report.Checks.Network.Target[node-b] = %v, want %v", report.Checks.Network.Target["node-b"], CheckResultFail)
+	if payload == "" {
+		t.Fatal("payload = empty, want non-empty")
 	}
 }
 
@@ -49,26 +48,28 @@ func TestLoadReportPayloadCompactsToMinimalManagerFields(t *testing.T) {
 	reportPath := filepath.Join(path, "worker-0.json")
 	raw := `{
 	  "version": 1,
-	  "workload": "job-a",
-	  "world_size": "2",
+	  "workload": "demo-train",
+	  "world_size": "4",
 	  "rank": "0",
-	  "node_name": "node-a",
+	  "node_name": "node-7",
 	  "result": 2,
-	  "check": {"gpu": 1, "nic": 1, "storage": 1, "node_check": 1},
+	  "check": {"storage": 1, "gpu": 1, "node_check": 2},
+	  "node_check_busbw_threshold_gbps": "12.5",
 	  "batches": [
-	    {"schema":"v3","batch_idx":0,"pair":["10.0.0.1","10.0.0.2"],"self_ip":"10.0.0.1","phase":"pairwise","allreduce_ms":1.2,"world_size":16,"allreduce_shape":16777216,"dtype_bytes":4,"ranks_recorded":8}
+	    {"schema":"v3","phase":"pairwise","batch_idx":0,"pair":["10.0.0.7","10.0.0.8"],"self_ip":"10.0.0.7","local_rank":0,"device":"MetaX C500","status":"ok","allreduce_ms":12.345,"world_size":16,"allreduce_shape":268435456,"dtype_bytes":4,"ranks_recorded":8},
+	    {"schema":"v3","batch_idx":1,"pair":["10.0.0.7","10.0.0.9"],"self_ip":"10.0.0.7","status":"fail","rc":124}
 	  ]
 	}`
 	if err := os.WriteFile(reportPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	report, payload, err := LoadReportPayload(baseDir, "default", "worker-0")
+	payload, nodeName, err := LoadReportPayload(baseDir, "default", "worker-0")
 	if err != nil {
 		t.Fatalf("LoadReportPayload() error = %v", err)
 	}
-	if report.NodeName != "node-a" {
-		t.Fatalf("report.NodeName = %q, want %q", report.NodeName, "node-a")
+	if nodeName != "node-7" {
+		t.Fatalf("nodeName = %q, want %q", nodeName, "node-7")
 	}
 	if len(payload) >= len(raw) {
 		t.Fatalf("len(payload) = %d, want < %d", len(payload), len(raw))
@@ -78,16 +79,38 @@ func TestLoadReportPayloadCompactsToMinimalManagerFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(payload), &compact); err != nil {
 		t.Fatalf("json.Unmarshal(payload) error = %v", err)
 	}
+	if _, exists := compact["version"]; exists {
+		t.Fatal("compact payload unexpectedly keeps version")
+	}
+	if _, exists := compact["workload"]; exists {
+		t.Fatal("compact payload unexpectedly keeps workload")
+	}
+	if compact["node_check_busbw_threshold_gbps"] != "12.5" {
+		t.Fatalf("compact threshold = %v, want 12.5", compact["node_check_busbw_threshold_gbps"])
+	}
 	batches, ok := compact["batches"].([]any)
-	if !ok || len(batches) != 1 {
-		t.Fatalf("compact batches = %v, want single batch", compact["batches"])
+	if !ok || len(batches) != 2 {
+		t.Fatalf("compact batches = %v, want two batches", compact["batches"])
 	}
-	batch := batches[0].(map[string]any)
-	if _, exists := batch["allreduce_ms"]; exists {
-		t.Fatal("compact batch unexpectedly keeps allreduce_ms")
+	batch0 := batches[0].(map[string]any)
+	if batch0["status"] != "ok" {
+		t.Fatalf("batch0 status = %v, want ok", batch0["status"])
 	}
-	if batch["status"] != "pass" {
-		t.Fatalf("batch status = %v, want pass", batch["status"])
+	if _, exists := batch0["device"]; exists {
+		t.Fatal("compact batch unexpectedly keeps device")
+	}
+	if _, exists := batch0["ranks_recorded"]; exists {
+		t.Fatal("compact batch unexpectedly keeps ranks_recorded")
+	}
+	if batch0["allreduce_ms"] != 12.345 {
+		t.Fatalf("batch0 allreduce_ms = %v, want 12.345", batch0["allreduce_ms"])
+	}
+	batch1 := batches[1].(map[string]any)
+	if batch1["status"] != "fail" {
+		t.Fatalf("batch1 status = %v, want fail", batch1["status"])
+	}
+	if _, exists := batch1["rc"]; exists {
+		t.Fatal("compact batch unexpectedly keeps rc")
 	}
 }
 
@@ -100,20 +123,35 @@ func TestReportPath(t *testing.T) {
 	}
 }
 
-func TestReportDeliveryEvent(t *testing.T) {
+func TestReportToEvent(t *testing.T) {
 	t.Parallel()
 
-	event := ReportDeliveryEvent("default", "node-a", "job-a", `{"version":1}`)
+	event, err := ReportToEvent("default", "node-a", "job-a", `{"version":1}`)
+	if err != nil {
+		t.Fatalf("ReportToEvent() error = %v", err)
+	}
 	if event.ResourceType != events.Node {
 		t.Fatalf("event.ResourceType = %s, want %s", event.ResourceType, events.Node)
 	}
 	if event.Name != "node-a" {
 		t.Fatalf("event.Name = %q, want %q", event.Name, "node-a")
 	}
-	if event.Annotations[constants.PreflightReportAnnotation] != constants.True {
-		t.Fatalf("preflight annotation = %q, want %q", event.Annotations[constants.PreflightReportAnnotation], constants.True)
+	if _, ok := event.Annotations[constants.PreflightNamespaceAnnotation]; ok {
+		t.Fatalf("preflight annotation = %q, want missing", event.Annotations[constants.PreflightNamespaceAnnotation])
 	}
-	if event.Annotations[constants.KubeflowJobLabel] != "job-a" {
-		t.Fatalf("job annotation = %q, want %q", event.Annotations[constants.KubeflowJobLabel], "job-a")
+	if event.Annotations[constants.PreflightWorkloadAnnotation] != "job-a" {
+		t.Fatalf("workload annotation = %q, want %q", event.Annotations[constants.PreflightWorkloadAnnotation], "job-a")
+	}
+	if event.EventType != 0 {
+		t.Fatalf("event.EventType = %d, want 0", event.EventType)
+	}
+}
+
+func TestReportToEventRejectsEmptyWorkload(t *testing.T) {
+	t.Parallel()
+
+	_, err := ReportToEvent("default", "node-a", "", `{"version":1}`)
+	if err == nil {
+		t.Fatal("ReportToEvent() error = nil, want non-nil")
 	}
 }

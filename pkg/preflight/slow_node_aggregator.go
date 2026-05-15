@@ -254,7 +254,7 @@ func detectSlowNodes(reports map[string]reportObservations, expectedBatches int,
 func extractBatchObservations(reportText string, cfg Settings) (Report, reportLayout, []batchObservation, error) {
 	cfg = cfg.Normalize()
 
-	report, err := ParseReportText(reportText)
+	report, err := parseReportText(reportText)
 	if err != nil {
 		return Report{}, reportLayout{}, nil, err
 	}
@@ -266,11 +266,14 @@ func extractBatchObservations(reportText string, cfg Settings) (Report, reportLa
 
 	batchRaw, _ := payload["batches"].([]any)
 
-	worldSize, err := intField(payload["world_size"])
+	workloadSize, err := intField(payload["workload_size"])
 	if err != nil {
-		worldSize = report.WorldSize
+		workloadSize, err = intField(payload["world_size"])
 	}
-	layout, err := resolveLayout(cfg, worldSize, len(batchRaw))
+	if err != nil {
+		workloadSize = report.WorkloadSize
+	}
+	layout, err := resolveLayout(cfg, workloadSize, len(batchRaw))
 	if err != nil {
 		return Report{}, reportLayout{}, nil, err
 	}

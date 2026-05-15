@@ -1,10 +1,6 @@
 package preflight
 
-import (
-	"reflect"
-	"sort"
-	"testing"
-)
+import "testing"
 
 func TestParseReportSupportsTargets(t *testing.T) {
 	t.Parallel()
@@ -20,8 +16,8 @@ func TestParseReportSupportsTargets(t *testing.T) {
 	if report.Checks.NodeCheck != CheckResultSkip {
 		t.Fatalf("report.Checks.NodeCheck = %v, want %v", report.Checks.NodeCheck, CheckResultSkip)
 	}
-	if !reflect.DeepEqual(failedTargets(report), []string{"node-b"}) {
-		t.Fatalf("failedTargets(report) = %v, want [node-b]", failedTargets(report))
+	if report.Checks.Storage != CheckResultPass {
+		t.Fatalf("report.Checks.Storage = %v, want %v", report.Checks.Storage, CheckResultPass)
 	}
 }
 
@@ -31,16 +27,4 @@ func TestParseReportRejectsMissingNodeName(t *testing.T) {
 	if _, err := parseReport(`{"version":1,"result":2,"check":{"network":{"result":2,"target":{"node-b":2}}}}`); err == nil {
 		t.Fatal("ParseReport error = nil, want non-nil when node_name is missing")
 	}
-}
-
-func failedTargets(report *Report) []string {
-	targets := make([]string, 0)
-	for nodeName, result := range report.Checks.Network.Target {
-		if result == CheckResultFail {
-			targets = append(targets, nodeName)
-		}
-	}
-	sort.Strings(targets)
-
-	return targets
 }

@@ -122,7 +122,7 @@ func (s *recordingSink) RecordEvent(event events.Event) error {
 	return nil
 }
 
-func preflightEvent(namespace, nodeName, jobName, report string) events.Event {
+func preflightEvent(namespace, nodeName, _ string, report string) events.Event {
 	return events.Event{
 		ResourceType: events.Node,
 		Namespace:    namespace,
@@ -130,8 +130,8 @@ func preflightEvent(namespace, nodeName, jobName, report string) events.Event {
 		EventType:    events.Error,
 		Message:      report,
 		Annotations: map[string]string{
-			constants.PreflightReportAnnotation: constants.True,
-			constants.KubeflowJobLabel:          jobName,
+			constants.PreflightNamespaceAnnotation: namespace,
+			constants.PreflightWorkloadAnnotation:  "job-a",
 		},
 	}
 }

@@ -2,7 +2,6 @@ package podobserver
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/runner"
@@ -44,7 +43,7 @@ func New(cli kubernetes.Interface, sink events.Sink, logName string, rules ...Po
 }
 
 func (o *observer) Start() error {
-	factory := informers.NewSharedInformerFactory(o.client, time.Minute)
+	factory := informers.NewSharedInformerFactory(o.client, 0)
 	informer := factory.Core().V1().Pods().Informer()
 
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -96,9 +95,9 @@ func (o *observer) onUpdate(oldPod, newPod *corev1.Pod) {
 	}
 }
 
-func (o *observer) publish(rule PodRule, eventsToPublish []events.Event) {
-	for _, event := range eventsToPublish {
-		if err := o.sink.RecordEvent(event); err != nil {
+func (o *observer) publish(rule PodRule, events []events.Event) {
+	for _, e := range events {
+		if err := o.sink.RecordEvent(e); err != nil {
 			klog.Errorf("failed to record event from %T: %v", rule, err)
 		}
 	}

@@ -122,16 +122,15 @@ controller:
 
   replicas: 1
   # Additional CLI args for kcover-controller process.
-  # Default keeps only essential info logs.
+  # Default enables preflight aggregation with the standard timeout and keeps only essential info logs.
   # Example for day2 debugging:
   # args:
-  #   - -v=2
-  # If preflight aggregation is re-enabled in code, you can also set:
   #   - --preflight-report-collection-timeout=30m
   #   - -v=2
   command:
     - /app/kcover-controller
   args:
+    - --preflight-report-collection-timeout=30m
     - -v=0
   podAnnotations: {}
   podLabels: {}
