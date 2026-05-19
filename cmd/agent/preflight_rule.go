@@ -24,8 +24,8 @@ type preflightRule struct {
 	baseDir string
 }
 
-func newPreflightObserver(cli kubernetes.Interface, sink events.Sink) (runner.Runner, error) {
-	observer, err := podobserver.New(cli, sink, "preflight pod observer", preflightRule{baseDir: preflightReportDir})
+func newPreflightObserver(cli kubernetes.Interface, sink events.Sink, nodeName string) (runner.Runner, error) {
+	observer, err := podobserver.NewForNode(cli, sink, "preflight pod observer", nodeName, preflightRule{baseDir: preflightReportDir})
 	if err != nil {
 		return nil, fmt.Errorf("create preflight pod observer: %w", err)
 	}
@@ -45,13 +45,19 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 	workloadName := preflightWorkloadName(newPod)
 	reportName, ok := preflightReportName(newPod, workloadName)
 	if !ok {
-		klog.V(2).InfoS("skip preflight report", "namespace", newPod.Namespace, "pod", newPod.Name, "workload", workloadName, "reason", "cannot derive report name")
 		return nil
 	}
 
-	reportText, nodeName, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
+	nodeName := strings.TrimSpace(newPod.Spec.NodeName)
+	if nodeName == "" {
+		return nil
+	}
+
+	// Temporarily bypass file-backed report loading and use in-memory reports keyed by node name.
+	// reportText, nodeName, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
+	reportText, nodeName, err := compactReportFromNodeName(nodeName)
 	if err != nil {
-		klog.V(2).InfoS("load preflight report failed", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName, "error", err)
+		klog.V(4).InfoS("load preflight report failed", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName, "node", nodeName, "error", err)
 		return nil
 	}
 	if nodeName == "" {
@@ -59,13 +65,23 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 		return nil
 	}
 
-	event, err := preflight.ReportToEvent(newPod.Namespace, nodeName, workloadName, reportText)
+	event, err := preflight.BuildEventFromReport(newPod.Namespace, nodeName, workloadName, reportText)
 	if err != nil {
 		klog.ErrorS(err, "build preflight delivery event failed", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName)
 		return nil
 	}
+	klog.V(3).InfoS("prepared preflight delivery event", "namespace", event.Namespace, "pod", newPod.Name, "node", event.Name, "workload", workloadName)
 
 	return []events.Event{event}
+}
+
+func compactReportFromNodeName(nodeName string) (string, string, error) {
+	rawReport, ok := reports[nodeName]
+	if !ok {
+		return "", "", fmt.Errorf("report for node %q not found", nodeName)
+	}
+
+	return preflight.CompactReport(rawReport)
 }
 
 func preflightWorkloadName(pod *corev1.Pod) string {
@@ -147,11 +163,19 @@ func petNodeRankFromPodName(podName, workloadName string) (string, bool) {
 }
 
 func shouldHandlePodUpdate(oldPod, newPod *corev1.Pod) bool {
-	if newPod == nil || newPod.Labels[constants.PreflightLabel] != constants.True {
+	if newPod == nil {
+		return false
+	}
+	if newPod.Labels[constants.PreflightLabel] != constants.True {
 		return false
 	}
 
-	return isPreflightFailed(oldPod.Status.InitContainerStatuses, newPod.Status.InitContainerStatuses)
+	var oldStatuses []corev1.ContainerStatus
+	if oldPod != nil {
+		oldStatuses = oldPod.Status.InitContainerStatuses
+	}
+
+	return isPreflightFailed(oldStatuses, newPod.Status.InitContainerStatuses)
 }
 
 // isPreflightFailed returns true only when the init container named "preflight"

@@ -33,7 +33,6 @@ type detector struct {
 }
 
 func NewDetector(cfg config.MetaX, interval int) *detector {
-	klog.V(2).InfoS("metax detector initialized", "vendor", "metax")
 	return &detector{
 		stopCh:   make(chan struct{}),
 		eventCh:  make(chan events.Event),

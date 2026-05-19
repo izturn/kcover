@@ -130,9 +130,9 @@ func TestReportPath(t *testing.T) {
 func TestReportToEvent(t *testing.T) {
 	t.Parallel()
 
-	event, err := ReportToEvent("default", "node-a", "job-a", `{"version":1}`)
+	event, err := BuildEventFromReport("default", "node-a", "job-a", `{"version":1}`)
 	if err != nil {
-		t.Fatalf("ReportToEvent() error = %v", err)
+		t.Fatalf("BuildEventFromReport() error = %v", err)
 	}
 	if event.ResourceType != events.Node {
 		t.Fatalf("event.ResourceType = %s, want %s", event.ResourceType, events.Node)
@@ -154,7 +154,7 @@ func TestReportToEvent(t *testing.T) {
 func TestReportToEventRejectsEmptyWorkload(t *testing.T) {
 	t.Parallel()
 
-	_, err := ReportToEvent("default", "node-a", "", `{"version":1}`)
+	_, err := BuildEventFromReport("default", "node-a", "", `{"version":1}`)
 	if err == nil {
 		t.Fatal("ReportToEvent() error = nil, want non-nil")
 	}

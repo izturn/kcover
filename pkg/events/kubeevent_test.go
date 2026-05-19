@@ -55,6 +55,9 @@ func TestRecordEventStoresPreflightPayloadInEventAnnotation(t *testing.T) {
 	if stored.Annotations[constants.PreflightNamespaceAnnotation] != "default" {
 		t.Fatalf("event preflight namespace annotation = %q, want %q", stored.Annotations[constants.PreflightNamespaceAnnotation], "default")
 	}
+	if stored.InvolvedObject.Namespace != stored.Namespace {
+		t.Fatalf("involved object namespace = %q, want %q", stored.InvolvedObject.Namespace, stored.Namespace)
+	}
 }
 
 func TestToInternalEventHydratesPreflightPayloadFromEventAnnotation(t *testing.T) {

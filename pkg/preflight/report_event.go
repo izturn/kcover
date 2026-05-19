@@ -21,7 +21,7 @@ func LoadReportPayload(baseDir, namespace, reportName string) (string, string, e
 		return "", "", fmt.Errorf("read %s: %w", path, err)
 	}
 
-	payload, nodeName, err := compactReport(string(data))
+	payload, nodeName, err := CompactReport(string(data))
 	if err != nil {
 		return "", "", fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -33,7 +33,7 @@ func LoadReportPayload(baseDir, namespace, reportName string) (string, string, e
 	return payload, nodeName, nil
 }
 
-func ReportToEvent(namespace, nodeName, workloadName, reportText string) (events.Event, error) {
+func BuildEventFromReport(namespace, nodeName, workloadName, reportText string) (events.Event, error) {
 	if workloadName == "" {
 		return events.Event{}, fmt.Errorf("preflight workload name is empty")
 	}
@@ -42,16 +42,18 @@ func ReportToEvent(namespace, nodeName, workloadName, reportText string) (events
 		constants.PreflightWorkloadAnnotation: workloadName,
 	}
 
-	return events.Event{
+	event := events.Event{
 		ResourceType: events.Node,
 		Namespace:    namespace,
 		Name:         nodeName,
 		Annotations:  annotations,
 		Message:      reportText,
-	}, nil
+	}
+
+	return event, nil
 }
 
-func compactReport(reportText string) (string, string, error) {
+func CompactReport(reportText string) (string, string, error) {
 	report, err := parseReport(reportText)
 	if err != nil {
 		return "", "", err

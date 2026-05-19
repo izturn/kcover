@@ -40,7 +40,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load agent config: %w", err)
 	}
-	klog.InfoS("agent config loaded", "config", cfg.String())
+	klog.V(2).InfoS("agent config loaded", "config", cfg.String())
 
 	hostName, err := hostName()
 	if err != nil {
@@ -65,7 +65,7 @@ func run() error {
 	}
 	defer detector.Stop()
 
-	observer, err := newPreflightObserver(client, sink)
+	observer, err := newPreflightObserver(client, sink, hostName)
 	if err != nil {
 		return fmt.Errorf("create preflight pod observer: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 	v1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/tools/reference"
+	"k8s.io/klog/v2"
 )
 
 type kubeEventSink struct {
@@ -63,12 +64,12 @@ func (sink *kubeEventSink) recordEvent(obj runtime.Object, event Event) error {
 	if err != nil {
 		return err
 	}
+	ensureEventNamespace(ref, event)
 
 	if IsPreflightEvent(event.Annotations) {
 		return sink.recordPreflightEvent(ref, event)
 	}
 
-	ensureEventNamespace(ref, event)
 	return sink.recordStdEvent(ref, event)
 }
 
@@ -77,16 +78,14 @@ func ensureEventNamespace(ref *corev1.ObjectReference, event Event) {
 		return
 	}
 
-	// Only day2 node events should be pinned to the agent runtime namespace.
-	ns := event.Namespace
-	if ns == "" {
-		ns = kube.CurrentNamespace()
-	}
-	ref.Namespace = ns
+	// Kubernetes requires involvedObject.namespace to match the Event namespace,
+	// even when the involved object itself is cluster-scoped like a Node.
+	ref.Namespace = kube.CurrentNamespace()
 }
 
 func (sink *kubeEventSink) recordStdEvent(ref *corev1.ObjectReference, event Event) error {
 	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, "Error", "%s", event.Message)
+	klog.V(3).InfoS("kube event sink recorded standard event", "kind", ref.Kind, "namespace", ref.Namespace, "name", ref.Name, "eventType", event.EventType)
 	return nil
 }
 
@@ -111,6 +110,7 @@ func (sink *kubeEventSink) recordPreflightEvent(ref *corev1.ObjectReference, eve
 	if err != nil {
 		return fmt.Errorf("create preflight event for %s: %w", ref.Name, err)
 	}
+	klog.V(3).InfoS("kube event sink recorded preflight event", "eventNamespace", evt.Namespace, "involvedName", ref.Name, "reason", evt.Reason, "workload", event.Annotations[constants.PreflightWorkloadAnnotation])
 
 	return nil
 }
@@ -152,6 +152,9 @@ func (sink *kubeEventSink) RecordEvent(e Event) error {
 		err = sink.recordToNode(e)
 	default:
 		return fmt.Errorf("unsupported target type: %s", e.ResourceType)
+	}
+	if err != nil {
+		return err
 	}
 
 	return err

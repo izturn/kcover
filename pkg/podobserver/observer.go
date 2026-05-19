@@ -7,6 +7,8 @@ import (
 	"github.com/baizeai/kcover/pkg/runner"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -19,11 +21,12 @@ type PodRule interface {
 }
 
 type observer struct {
-	client  kubernetes.Interface
-	sink    events.Sink
-	rules   []PodRule
-	stopCh  chan struct{}
-	logName string
+	client   kubernetes.Interface
+	sink     events.Sink
+	rules    []PodRule
+	stopCh   chan struct{}
+	logName  string
+	nodeName string
 }
 
 var _ runner.Runner = (*observer)(nil)
@@ -42,8 +45,36 @@ func New(cli kubernetes.Interface, sink events.Sink, logName string, rules ...Po
 	}, nil
 }
 
+func NewForNode(cli kubernetes.Interface, sink events.Sink, logName, nodeName string, rules ...PodRule) (runner.Runner, error) {
+	if nodeName == "" {
+		return nil, fmt.Errorf("observer node name can not be empty")
+	}
+
+	runner, err := New(cli, sink, logName, rules...)
+	if err != nil {
+		return nil, err
+	}
+
+	obs, ok := runner.(*observer)
+	if !ok {
+		return nil, fmt.Errorf("unexpected observer type %T", runner)
+	}
+	obs.nodeName = nodeName
+
+	return obs, nil
+}
+
 func (o *observer) Start() error {
 	factory := informers.NewSharedInformerFactory(o.client, 0)
+	if o.nodeName != "" {
+		factory = informers.NewSharedInformerFactoryWithOptions(
+			o.client,
+			0,
+			informers.WithTweakListOptions(func(options *metav1.ListOptions) {
+				options.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", o.nodeName).String()
+			}),
+		)
+	}
 	informer := factory.Core().V1().Pods().Informer()
 
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -75,7 +106,12 @@ func (o *observer) Start() error {
 
 	go informer.Run(o.stopCh)
 
-	klog.InfoS("pod observer started", "observer", o.logName)
+	if o.nodeName == "" {
+		klog.InfoS("pod observer started", "observer", o.logName)
+		return nil
+	}
+
+	klog.InfoS("pod observer started", "observer", o.logName, "node", o.nodeName)
 	return nil
 }
 
@@ -91,14 +127,22 @@ func (o *observer) onAdd(pod *corev1.Pod) {
 
 func (o *observer) onUpdate(oldPod, newPod *corev1.Pod) {
 	for _, rule := range o.rules {
-		o.publish(rule, rule.OnUpdate(oldPod, newPod))
+		events := rule.OnUpdate(oldPod, newPod)
+		o.publish(rule, events)
 	}
 }
 
 func (o *observer) publish(rule PodRule, events []events.Event) {
+	ruleName := fmt.Sprintf("%T", rule)
+	if len(events) == 0 {
+		return
+	}
+
 	for _, e := range events {
 		if err := o.sink.RecordEvent(e); err != nil {
 			klog.ErrorS(err, "failed to record event", "rule", rule)
+			continue
 		}
+		klog.V(3).InfoS("pod observer published event", "observer", o.logName, "rule", ruleName, "resourceType", e.ResourceType, "namespace", e.Namespace, "name", e.Name)
 	}
 }

@@ -5,8 +5,6 @@ import (
 
 	d "github.com/baizeai/kcover/pkg/detector"
 	"github.com/baizeai/kcover/pkg/events"
-
-	"k8s.io/klog/v2"
 )
 
 var _ d.Detector = (*detector)(nil)
@@ -19,7 +17,6 @@ type detector struct {
 }
 
 func NewDetector(nodeName string, interval int) *detector {
-	klog.V(2).Info("for vendor: nvidia")
 	return &detector{
 		events:   make(chan events.Event),
 		stop:     make(chan struct{}),
@@ -37,7 +34,6 @@ func (d *detector) Start() error {
 			case <-t.C:
 				// run dcgmi
 				// parse results
-				klog.V(4).Info("start dcgmi diag -r 1")
 				//d.events <- events.CollectorEvent{
 				//	TargetType: events.Node,
 				//	Name:       "worker-a800-2",
