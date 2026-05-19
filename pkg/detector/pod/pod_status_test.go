@@ -32,7 +32,7 @@ func TestShouldCheckPodUpdate(t *testing.T) {
 	updatedPod := oldPod.DeepCopy()
 	updatedPod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
 		Name:  "preflight",
-		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: `{"version":1,"result":2,"node_name":"node-a","check":{"storage":1,"gpu":1,"node_check":0,"network":{"result":2,"target":{"node-b":2}}}}`}},
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: `{"version":1,"node_name":"node-a","gpu_check":1,"storage_check":1}`}},
 	}}
 	if !shouldCheckPodUpdate(oldPod, updatedPod) {
 		t.Fatal("shouldCheckPodUpdate(oldPod, updatedPod) = false, want true for changed init statuses")

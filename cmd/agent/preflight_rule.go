@@ -45,23 +45,23 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 	workloadName := preflightWorkloadName(newPod)
 	reportName, ok := preflightReportName(newPod, workloadName)
 	if !ok {
-		klog.V(2).Infof("skip preflight report for pod %s/%s: can not derive report name from workload=%q", newPod.Namespace, newPod.Name, workloadName)
+		klog.V(2).InfoS("skip preflight report", "namespace", newPod.Namespace, "pod", newPod.Name, "workload", workloadName, "reason", "cannot derive report name")
 		return nil
 	}
 
 	reportText, nodeName, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
 	if err != nil {
-		klog.V(2).Infof("load preflight report %s/%s from %s: %v", newPod.Namespace, newPod.Name, reportName, err)
+		klog.V(2).InfoS("load preflight report failed", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName, "error", err)
 		return nil
 	}
 	if nodeName == "" {
-		klog.Errorf("preflight report %s/%s from %s has empty node_name", newPod.Namespace, newPod.Name, reportName)
+		klog.ErrorS(nil, "preflight report has empty node name", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName)
 		return nil
 	}
 
 	event, err := preflight.ReportToEvent(newPod.Namespace, nodeName, workloadName, reportText)
 	if err != nil {
-		klog.Errorf("build preflight delivery event for %s/%s from %s: %v", newPod.Namespace, newPod.Name, reportName, err)
+		klog.ErrorS(err, "build preflight delivery event failed", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName)
 		return nil
 	}
 

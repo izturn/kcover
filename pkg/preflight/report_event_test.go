@@ -20,7 +20,7 @@ func TestLoadReportPayloadReturnsNodeName(t *testing.T) {
 	}
 
 	reportPath := filepath.Join(path, "worker-0.json")
-	if err := os.WriteFile(reportPath, []byte(`{"version":1,"workload":"job-a","world_size":2,"rank":0,"result":2,"node_name":"node-a","check":{"gpu":1,"nic":1,"storage":1,"node_check":1,"network":{"result":2,"target":{"node-b":2}}},"batches":[{"batch_idx":0,"pair":["node-a","node-b"],"status":"fail"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(reportPath, []byte(`{"version":1,"workload":"job-a","workload_size":2,"rank":0,"node_name":"node-a","node_ip":"10.0.0.1","gpu_check":1,"storage_check":1,"batches":[{"batch_idx":0,"pair":["10.0.0.1","10.0.0.2"],"self_ip":"10.0.0.1","status":"fail"}]}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -49,11 +49,12 @@ func TestLoadReportPayloadCompactsToMinimalManagerFields(t *testing.T) {
 	raw := `{
 	  "version": 1,
 	  "workload": "demo-train",
-	  "world_size": "4",
-	  "rank": "0",
+	  "workload_size": 4,
+	  "rank": 0,
 	  "node_name": "node-7",
-	  "result": 2,
-	  "check": {"storage": 1, "gpu": 1, "node_check": 2},
+	  "node_ip": "10.0.0.7",
+	  "gpu_check": 1,
+	  "storage_check": 1,
 	  "node_check_busbw_threshold_gbps": "12.5",
 	  "batches": [
 	    {"schema":"v3","phase":"pairwise","batch_idx":0,"pair":["10.0.0.7","10.0.0.8"],"self_ip":"10.0.0.7","local_rank":0,"device":"MetaX C500","status":"ok","allreduce_ms":12.345,"world_size":16,"allreduce_shape":268435456,"dtype_bytes":4,"ranks_recorded":8},
@@ -84,6 +85,9 @@ func TestLoadReportPayloadCompactsToMinimalManagerFields(t *testing.T) {
 	}
 	if _, exists := compact["workload"]; exists {
 		t.Fatal("compact payload unexpectedly keeps workload")
+	}
+	if compact["node_ip"] != "10.0.0.7" {
+		t.Fatalf("compact node_ip = %v, want 10.0.0.7", compact["node_ip"])
 	}
 	if compact["node_check_busbw_threshold_gbps"] != "12.5" {
 		t.Fatalf("compact threshold = %v, want 12.5", compact["node_check_busbw_threshold_gbps"])

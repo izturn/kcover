@@ -55,14 +55,14 @@ func (d *detector) Start() error {
 		if err := v.Start(); err != nil {
 			return err
 		}
-		klog.Infof("detector: %v started", v)
+		klog.InfoS("detector started", "detector", v)
 	}
 
 	for _, v := range d.detectors {
 		go func(detector detectorpkg.Detector) {
 			for evt := range detector.EventChan() {
 				if err := d.eventSink.RecordEvent(evt); err != nil {
-					klog.Errorf("failed to record event of %T: %v", detector, err)
+					klog.ErrorS(err, "failed to record event", "detector", detector)
 				}
 			}
 		}(v)

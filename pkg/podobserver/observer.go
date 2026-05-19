@@ -75,7 +75,7 @@ func (o *observer) Start() error {
 
 	go informer.Run(o.stopCh)
 
-	klog.Infof("%s started", o.logName)
+	klog.InfoS("pod observer started", "observer", o.logName)
 	return nil
 }
 
@@ -98,7 +98,7 @@ func (o *observer) onUpdate(oldPod, newPod *corev1.Pod) {
 func (o *observer) publish(rule PodRule, events []events.Event) {
 	for _, e := range events {
 		if err := o.sink.RecordEvent(e); err != nil {
-			klog.Errorf("failed to record event from %T: %v", rule, err)
+			klog.ErrorS(err, "failed to record event", "rule", rule)
 		}
 	}
 }

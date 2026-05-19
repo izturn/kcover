@@ -19,104 +19,79 @@ import (
 )
 
 type RecoveryController struct {
-	client             kubernetes.Interface
-	eventStream        events.Stream
-	eventSink          events.Sink
-	stopCh             chan struct{}
-	restartDuration    time.Duration
-	restarts           *ttlcache.Cache[string, time.Time]
-	slowNodeAggregator *preflight.SlowNodeAggregator
+	client                 kubernetes.Interface
+	eventStream            events.Stream
+	eventSink              events.Sink
+	stopCh                 chan struct{}
+	preflightSweepInterval time.Duration
+	restartDuration        time.Duration
+	restarts               *ttlcache.Cache[string, time.Time]
+	slowNodeAgg            *preflight.SlowNodeAggregator
 }
 
-type ControllerOptions struct {
-	PreflightReportCollectionTimeout time.Duration
-}
+const DefaultPreflightSweepInterval = time.Minute
 
-func NewController(cli kubernetes.Interface, stream events.Stream, opts ...ControllerOptions) *RecoveryController {
-	preflightConfig, err := preflight.LoadConfig(context.Background(), cli, kube.CurrentNamespace())
-	if err != nil {
-		klog.Warningf("load preflight config: %v; using defaults", err)
-		preflightConfig = preflight.DefaultConfig()
+func NewController(cli kubernetes.Interface, stream events.Stream, preflightReportCollectionTimeout, preflightSweepInterval time.Duration) *RecoveryController {
+	slowNodeAgg := preflight.NewSlowNodeAggregator(preflightReportCollectionTimeout)
+	if preflightSweepInterval <= 0 {
+		preflightSweepInterval = DefaultPreflightSweepInterval
 	}
-	if len(opts) > 0 && opts[0].PreflightReportCollectionTimeout > 0 {
-		preflightConfig.ReportCollectionTimeout = opts[0].PreflightReportCollectionTimeout
-	}
-	preflightConfig = preflightConfig.Normalize()
-	aggregator := preflight.NewSlowNodeAggregator(preflightConfig)
 
 	return &RecoveryController{
-		client:             cli,
-		eventStream:        stream,
-		eventSink:          events.NewKubeEventSink(cli),
-		stopCh:             make(chan struct{}),
-		restartDuration:    time.Second * 30,
-		restarts:           ttlcache.New[string, time.Time](),
-		slowNodeAggregator: aggregator,
+		client:                 cli,
+		eventStream:            stream,
+		eventSink:              events.NewKubeEventSink(cli),
+		stopCh:                 make(chan struct{}),
+		preflightSweepInterval: preflightSweepInterval,
+		restartDuration:        time.Second * 30,
+		restarts:               ttlcache.New[string, time.Time](),
+		slowNodeAgg:            slowNodeAgg,
 	}
 }
 
-func (r *RecoveryController) reportPreflightAggregationTimeout(timeoutErr preflight.ReportCollectionTimeoutError) {
-	if r.eventSink == nil {
-		return
-	}
-	anchorNode := timeoutErr.AnchorNodeName()
+func (r *RecoveryController) handlePreflightTimeout(timeoutErr preflight.WorkloadTimeoutError) {
+	anchorNode := timeoutErr.FirstReportedNode()
 	if anchorNode == "" {
-		klog.V(2).Infof("skip warning event for expired preflight aggregation %s/%s: no reported nodes", timeoutErr.Namespace, timeoutErr.JobName)
+		klog.V(2).InfoS("skip preflight aggregation timeout report", "namespace", timeoutErr.Namespace, "workload", timeoutErr.WorkloadName, "reason", "no reported nodes")
 		return
 	}
 
-	message := fmt.Sprintf(
-		"preflight aggregation for job %s timed out after %s: received %d/%d reports; reported nodes=%v",
-		timeoutErr.JobName,
-		timeoutErr.Timeout,
-		timeoutErr.ReceivedReports,
-		timeoutErr.ExpectedReports,
-		timeoutErr.ReportedNodes,
-	)
-	if err := r.eventSink.RecordEvent(events.Event{
-		ResourceType: events.Node,
-		Namespace:    timeoutErr.Namespace,
-		Name:         anchorNode,
-		EventType:    events.Warning,
-		Message:      message,
-	}); err != nil {
-		klog.Errorf("record preflight aggregation timeout warning for %s/%s: %v", timeoutErr.Namespace, timeoutErr.JobName, err)
-	}
+	klog.ErrorS(nil, "preflight aggregation timeout", "node", anchorNode, "namespace", timeoutErr.Namespace, "workload", timeoutErr.WorkloadName, "timeout", timeoutErr.Timeout, "receivedReports", timeoutErr.ReceivedReports, "expectedReports", timeoutErr.ExpectedReports, "reportedNodes", timeoutErr.ReportedNodes)
 }
 
 func (r *RecoveryController) onPodError(namespace, name string) {
-	klog.V(2).Infof("start handling pod error ns=%s pod=%s", namespace, name)
+	klog.V(2).InfoS("start handling pod error", "namespace", namespace, "pod", name)
 	pod, err := r.client.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
-		klog.Errorf("get pod %s/%s: %v", namespace, name, err)
+		klog.ErrorS(err, "get pod failed", "namespace", namespace, "pod", name)
 		return
 	}
 
 	recoveryEnabled, err := r.isRecoveryEnabledForPod(pod)
 	if err != nil {
-		klog.Errorf("get recovery labels for pod %s/%s: %v", namespace, name, err)
+		klog.ErrorS(err, "get recovery labels failed", "namespace", namespace, "pod", name)
 		return
 	}
 	if !recoveryEnabled {
-		klog.V(4).Infof("skip recovery for pod %s/%s: pod and owner job have no recovery label", namespace, name)
+		klog.V(4).InfoS("skip recovery for pod", "namespace", namespace, "pod", name, "reason", "pod and owner job have no recovery label")
 		return
 	}
 
 	jobLabel, ok := pod.Labels[constants.KubeflowJobLabel]
 	if !ok {
-		klog.V(2).Infof("skip recovery for pod %s/%s: missing job label", namespace, name)
+		klog.V(2).InfoS("skip recovery for pod", "namespace", namespace, "pod", name, "reason", "missing job label")
 		return
 	}
 
 	if pod.Spec.RestartPolicy == corev1.RestartPolicyNever {
-		klog.V(2).Infof("skip recovery for pod %s/%s: restartPolicy is Never", namespace, name)
+		klog.V(2).InfoS("skip recovery for pod", "namespace", namespace, "pod", name, "reason", "restartPolicy is Never")
 		return
 	}
 	if !r.allowJobRestart(namespace, jobLabel) {
 		return
 	}
 
-	klog.V(2).Infof("trigger pod recovery restart for ns=%s job=%s from pod=%s", namespace, jobLabel, name)
+	klog.V(2).InfoS("trigger pod recovery restart", "namespace", namespace, "job", jobLabel, "pod", name)
 	r.restartJob(context.Background(), namespace, jobLabel)
 }
 
@@ -137,12 +112,12 @@ func (r *RecoveryController) allowJobRestart(namespace, jobLabel string) bool {
 	key := fmt.Sprintf("%s/%s", namespace, jobLabel)
 	restartedAt := r.restarts.Get(key)
 	if restartedAt != nil {
-		klog.V(2).Infof("skip restart for job %s/%s: last restarted at %v, retry window %v", namespace, jobLabel, restartedAt.Value(), r.restartDuration)
+		klog.V(2).InfoS("skip restart for job", "namespace", namespace, "job", jobLabel, "lastRestartedAt", restartedAt.Value(), "retryWindow", r.restartDuration)
 		return false
 	}
 
 	now := time.Now()
-	r.restarts.Set(key, now, r.restartDuration) // only restart once in 60 seconds
+	r.restarts.Set(key, now, r.restartDuration) // only restart once within restartDuration
 	go func() {
 		<-time.After(r.restartDuration - time.Second)
 		r.restarts.Delete(key)
@@ -156,9 +131,9 @@ func (r *RecoveryController) restartJob(ctx context.Context, namespace, name str
 		LabelSelector: fmt.Sprintf("%s=%s", constants.KubeflowJobLabel, name),
 	})
 	if err != nil {
-		klog.Errorf("restart job %s/%s: %v", namespace, name, err)
+		klog.ErrorS(err, "restart job failed", "namespace", namespace, "job", name)
 	} else {
-		klog.Infof("restarted job %s/%s", namespace, name)
+		klog.InfoS("restarted job", "namespace", namespace, "job", name)
 	}
 }
 
@@ -169,19 +144,19 @@ type nsName struct {
 
 func (r *RecoveryController) ensureNodeUnschedulable(name string) bool {
 	if err := kube.TaintNodeUnschedulable(context.Background(), r.client, name); err != nil {
-		klog.Errorf("mark node %s unschedulable: %v", name, err)
+		klog.ErrorS(err, "mark node unschedulable failed", "node", name)
 		return false
 	}
 
-	klog.Infof("marked node %s unschedulable with no-schedule taint", name)
+	klog.InfoS("marked node unschedulable", "node", name, "taint", "NoSchedule")
 	return true
 }
 
 func (r *RecoveryController) onNodeError(name string) {
-	klog.V(2).Infof("start handling node error node=%s", name)
+	klog.V(2).InfoS("start handling node error", "node", name)
 	node, err := r.client.CoreV1().Nodes().Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
-		klog.Errorf("get node %s: %v", name, err)
+		klog.ErrorS(err, "get node failed", "node", name)
 		return
 	}
 
@@ -192,7 +167,7 @@ func (r *RecoveryController) onNodeError(name string) {
 
 	jobs, err := r.listJobsOnNode(name)
 	if err != nil {
-		klog.Errorf("list jobs on node %s: %v", name, err)
+		klog.ErrorS(err, "list jobs on node failed", "node", name)
 		return
 	}
 
@@ -232,79 +207,74 @@ func (r *RecoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
 }
 
 func (r *RecoveryController) onPreflightReport(namespace string, e events.Event) {
-	klog.V(2).Infof(
-		"start handling preflight report event ns=%s node=%s annotations=%v messageBytes=%d",
-		namespace,
-		e.Name,
-		e.Annotations,
-		len(e.Message),
-	)
-	if r.slowNodeAggregator == nil {
-		klog.V(2).Info("skip preflight report: collector is nil")
+	klog.V(2).InfoS("start handling preflight report event", "namespace", namespace, "node", e.Name, "annotations", e.Annotations, "messageBytes", len(e.Message))
+
+	if r.slowNodeAgg == nil {
+		klog.V(2).InfoS("skip preflight report", "reason", "collector is nil")
 		return
 	}
 
-	jobName := e.Annotations[constants.PreflightWorkloadAnnotation]
-	if jobName == "" {
-		klog.V(2).Infof("skip preflight report %s/%s: missing %s", namespace, e.Name, constants.PreflightWorkloadAnnotation)
+	workloadName := e.Annotations[constants.PreflightWorkloadAnnotation]
+	if workloadName == "" {
+		klog.V(2).InfoS("skip preflight report", "namespace", namespace, "node", e.Name, "missingAnnotation", constants.PreflightWorkloadAnnotation)
 		return
 	}
 
-	ready, slowNodes, err := r.slowNodeAggregator.AddReport(namespace, jobName, e.Message)
+	ready, slowNodes, err := r.slowNodeAgg.AddReport(namespace, workloadName, e.Message)
 	if err != nil {
-		var timeoutErr preflight.ReportCollectionTimeoutError
+		var timeoutErr preflight.WorkloadTimeoutError
 		if errors.As(err, &timeoutErr) {
-			r.reportPreflightAggregationTimeout(timeoutErr)
-			klog.Errorf("expired stale preflight aggregation before processing %s/%s: %v", namespace, jobName, err)
+			r.handlePreflightTimeout(timeoutErr)
+			return
 		}
-		klog.Errorf("aggregate preflight report for %s/%s: %v", namespace, jobName, err)
+		klog.ErrorS(err, "aggregate preflight report failed", "namespace", namespace, "workload", workloadName)
 		return
 	}
 
 	if !ready {
-		klog.V(2).Infof("received preflight report for %s/%s, waiting for more", namespace, jobName)
+		klog.V(2).InfoS("received preflight report", "namespace", namespace, "workload", workloadName, "state", "waiting")
 		return
 	}
 
 	if len(slowNodes) == 0 {
-		klog.Infof("preflight report for %s/%s finished without slow nodes", namespace, jobName)
+		klog.InfoS("preflight report finished without slow nodes", "namespace", namespace, "workload", workloadName)
 		return
 	}
 
-	for _, nodeName := range slowNodes {
-		klog.V(2).Infof("preflight marked slow node node=%s for ns=%s job=%s", nodeName, namespace, jobName)
-		r.ensureNodeUnschedulable(nodeName)
+	for _, node := range slowNodes {
+		klog.V(2).InfoS("preflight marked slow node", "node", node, "namespace", namespace, "workload", workloadName)
+		r.ensureNodeUnschedulable(node)
 	}
 }
 
 func (r *RecoveryController) sweepExpiredPreflightReports() {
-	if r.slowNodeAggregator == nil {
+	if r.slowNodeAgg == nil {
 		return
 	}
-	for _, err := range r.slowNodeAggregator.ExpireStale() {
-		r.reportPreflightAggregationTimeout(err)
-		klog.Errorf("expire stale preflight aggregation: %v", err)
+	for _, err := range r.slowNodeAgg.ExpireTimedOutWorkloads() {
+		r.handlePreflightTimeout(err)
+		klog.ErrorS(err, "expire stale preflight aggregation failed")
 	}
 }
 
 func (r *RecoveryController) onEvent(e events.Event) {
-	klog.V(4).Infof("recovery controller received event: %+v", e)
+	klog.V(4).InfoS("recovery controller received event", "event", e)
 	switch e.ResourceType {
 	case events.Pod:
 		if e.EventType == events.Error {
-			klog.V(2).Infof("dispatch event to pod recovery ns=%s pod=%s", e.Namespace, e.Name)
+			klog.V(2).InfoS("dispatch event to pod recovery", "namespace", e.Namespace, "pod", e.Name)
 			r.onPodError(e.Namespace, e.Name)
 		}
 	case events.Node:
-		if e.Annotations[constants.PreflightNamespaceAnnotation] != "" {
-			klog.V(2).Infof("dispatch event to preflight aggregator ns=%s node=%s", e.Namespace, e.Name)
+		if events.IsPreflightEvent(e.Annotations) {
+			klog.V(2).InfoS("dispatch event to preflight aggregator", "namespace", e.Namespace, "node", e.Name)
 			r.onPreflightReport(e.Namespace, e)
 			return
 		}
-		klog.V(2).Infof("dispatch event to node recovery node=%s", e.Name)
+		klog.V(2).InfoS("dispatch event to node recovery", "node", e.Name)
 		r.onNodeError(e.Name)
 	default:
-		klog.Errorf("unsupported event resource type: %s", e.ResourceType)
+		klog.ErrorS(nil, "unsupported event resource type", "resourceType", e.ResourceType)
 	}
 }
 
@@ -313,7 +283,7 @@ func (r *RecoveryController) Start() error {
 		return fmt.Errorf("event stream is nil")
 	}
 	go func() {
-		ticker := time.NewTicker(time.Minute)
+		ticker := time.NewTicker(r.preflightSweepInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -330,7 +300,7 @@ func (r *RecoveryController) Start() error {
 
 	}()
 
-	klog.Info("recovery controller started")
+	klog.InfoS("recovery controller started")
 	return nil
 }
 

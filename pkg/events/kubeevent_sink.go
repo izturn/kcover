@@ -64,15 +64,15 @@ func (sink *kubeEventSink) recordEvent(obj runtime.Object, event Event) error {
 		return err
 	}
 
-	if isInternalPreflightEvent(event) {
+	if IsPreflightEvent(event.Annotations) {
 		return sink.recordPreflightEvent(ref, event)
 	}
 
-	fixEventNamespace(ref, event)
+	ensureEventNamespace(ref, event)
 	return sink.recordStdEvent(ref, event)
 }
 
-func fixEventNamespace(ref *corev1.ObjectReference, event Event) {
+func ensureEventNamespace(ref *corev1.ObjectReference, event Event) {
 	if ref == nil || ref.Namespace != "" || event.ResourceType != Node {
 		return
 	}
@@ -130,7 +130,7 @@ func annotationsForEvent(event Event) map[string]string {
 		annotations[key] = value
 	}
 
-	if isInternalPreflightEvent(event) {
+	if IsPreflightEvent(event.Annotations) {
 		annotations[constants.PreflightNamespaceAnnotation] = event.Namespace
 		annotations[constants.PreflightPayloadAnnotation] = event.Message
 		return annotations
@@ -141,14 +141,6 @@ func annotationsForEvent(event Event) map[string]string {
 	}
 
 	return annotations
-}
-
-func isInternalPreflightEvent(event Event) bool {
-	return event.Annotations[constants.PreflightWorkloadAnnotation] != ""
-}
-
-func isPreflightEvent(annotations map[string]string) bool {
-	return annotations[constants.PreflightNamespaceAnnotation] != ""
 }
 
 func (sink *kubeEventSink) RecordEvent(e Event) error {

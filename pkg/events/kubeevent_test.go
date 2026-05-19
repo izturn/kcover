@@ -8,7 +8,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -17,7 +16,7 @@ func TestRecordEventStoresPreflightPayloadInEventAnnotation(t *testing.T) {
 
 	client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 	sink := NewKubeEventSink(client).(*kubeEventSink)
-	payload := `{"world_size":2,"rank":0,"node_name":"node-a","result":2,"check":{"storage":1,"gpu":1,"node_check":2},"batches":[{"batch_idx":0,"pair":["node-a","node-b"],"status":"fail"}]}`
+	payload := `{"workload_size":2,"rank":0,"node_name":"node-a","gpu_check":1,"storage_check":1,"batches":[{"batch_idx":0,"pair":["10.0.0.1","10.0.0.2"],"self_ip":"10.0.0.1","status":"fail"}]}`
 
 	err := sink.RecordEvent(Event{
 		ResourceType: Node,
@@ -61,7 +60,7 @@ func TestRecordEventStoresPreflightPayloadInEventAnnotation(t *testing.T) {
 func TestToInternalEventHydratesPreflightPayloadFromEventAnnotation(t *testing.T) {
 	t.Parallel()
 
-	payload := `{"world_size":2,"rank":0,"node_name":"node-a","result":2,"check":{"storage":1,"gpu":1,"node_check":2},"batches":[{"batch_idx":0,"pair":["node-a","node-b"],"status":"fail"}]}`
+	payload := `{"workload_size":2,"rank":0,"node_name":"node-a","gpu_check":1,"storage_check":1,"batches":[{"batch_idx":0,"pair":["10.0.0.1","10.0.0.2"],"self_ip":"10.0.0.1","status":"fail"}]}`
 	client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 	bridge := NewKubeEventBridge(client).(*kubeEventBridge)
 
@@ -94,33 +93,5 @@ func TestToInternalEventHydratesPreflightPayloadFromEventAnnotation(t *testing.T
 	}
 	if event.Annotations[constants.PreflightWorkloadAnnotation] != "job-a" {
 		t.Fatalf("job annotation = %q, want %q", event.Annotations[constants.PreflightWorkloadAnnotation], "job-a")
-	}
-}
-
-func TestToInternalEventFallsBackToLegacyPreflightMessage(t *testing.T) {
-	t.Parallel()
-
-	payload := `{"world_size":2,"rank":0,"node_name":"node-a","result":2,"check":{"storage":1,"gpu":1,"node_check":2},"batches":[{"batch_idx":0,"pair":["node-a","node-b"],"status":"fail"}]}`
-	client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
-	bridge := NewKubeEventBridge(client).(*kubeEventBridge)
-
-	event, ok := bridge.toInternalEvent(&corev1.Event{
-		ObjectMeta: metav1.ObjectMeta{
-			Annotations: map[string]string{
-				constants.PreflightNamespaceAnnotation: "train-ns",
-			},
-		},
-		Message: payload,
-		InvolvedObject: corev1.ObjectReference{
-			APIVersion: schema.GroupVersion{Version: "v1"}.String(),
-			Kind:       "Node",
-			Name:       "node-a",
-		},
-	})
-	if !ok {
-		t.Fatal("toInternalEvent(...) ok = false, want true")
-	}
-	if event.Message != payload {
-		t.Fatalf("event.Message = %q, want %q", event.Message, payload)
 	}
 }

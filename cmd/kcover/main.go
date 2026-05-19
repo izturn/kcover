@@ -31,6 +31,12 @@ var preflightReportCollectionTimeout = flag.Duration(
 	"maximum time to wait for a complete set of preflight reports before expiring the partial aggregation",
 )
 
+var preflightSweepInterval = flag.Duration(
+	"preflight-sweep-interval",
+	recovery.DefaultPreflightSweepInterval,
+	"interval for sweeping expired preflight report aggregations",
+)
+
 func mustHostName() string {
 	if nodeName := kube.NodeNameFromEnv(); nodeName != "" {
 		return nodeName
@@ -55,7 +61,7 @@ func lock(hostName string) *resourcelock.LeaseLock {
 	}
 }
 
-func makeElectionCallback(reportCollectionTimeout time.Duration) (func(ctx context.Context), func()) {
+func makeElectionCallback(reportCollectionTimeout, sweepInterval time.Duration) (func(ctx context.Context), func()) {
 	cfg := kube.GetK8sConfigConfigWithFile("", "")
 	client := kubernetes.NewForConfigOrDie(cfg)
 
@@ -69,9 +75,12 @@ func makeElectionCallback(reportCollectionTimeout time.Duration) (func(ctx conte
 			// 当前实例成为 leader 时，开始执行 controller 逻辑
 			var err error
 			bridge = events.NewKubeEventBridge(client)
-			recov = recovery.NewController(client, bridge, recovery.ControllerOptions{
-				PreflightReportCollectionTimeout: reportCollectionTimeout,
-			})
+			recov = recovery.NewController(
+				client,
+				bridge,
+				reportCollectionTimeout,
+				sweepInterval,
+			)
 			detector, err = pod.NewDetector(client, bridge)
 			if err != nil {
 				panic(err)
@@ -86,19 +95,19 @@ func makeElectionCallback(reportCollectionTimeout time.Duration) (func(ctx conte
 				panic(err)
 			}
 
-			klog.Info("kcover is started")
+			klog.InfoS("kcover started")
 		},
 		func() {
 			recov.Stop()
 			detector.Stop()
 			bridge.Stop()
-			klog.Info("kcover is stopped")
+			klog.InfoS("kcover stopped")
 		}
 }
 
 func main() {
 	flag.Parse()
-	started, stopped := makeElectionCallback(*preflightReportCollectionTimeout)
+	started, stopped := makeElectionCallback(*preflightReportCollectionTimeout, *preflightSweepInterval)
 	leaderElectionConfig := leaderelection.LeaderElectionConfig{
 		Lock:            lock(mustHostName()),
 		ReleaseOnCancel: true,

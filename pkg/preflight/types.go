@@ -9,18 +9,17 @@ const (
 )
 
 // Report 表示一个节点上报的一份 preflight 结果。
-// NodeName 由 JSON 中的 node_name 提供。
 type Report struct {
-	Version      int         `json:"version"`
-	WorkloadSize int         `json:"workload_size,omitempty"`
-	Rank         int         `json:"rank,omitempty"`
-	Result       CheckResult `json:"result"`
-	Checks       Check       `json:"check"`
-	NodeName     string      `json:"node_name,omitempty"`
-}
+	Version      int    `json:"version"`
+	Workload     string `json:"workload,omitempty"`
+	WorkloadSize int    `json:"workload_size,omitempty"`
+	Rank         int    `json:"rank,omitempty"`
+	NodeName     string `json:"node_name,omitempty"`
+	NodeIP       string `json:"node_ip,omitempty"`
 
-type Check struct {
-	GPU       CheckResult `json:"gpu"`
-	Storage   CheckResult `json:"storage"`
-	NodeCheck CheckResult `json:"node_check"`
+	// checks
+	GPUCheck     CheckResult `json:"gpu_check,omitempty"`
+	StorageCheck CheckResult `json:"storage_check,omitempty"`
+
+	// node_check 单独处理
 }

@@ -52,7 +52,7 @@ func ReportToEvent(namespace, nodeName, workloadName, reportText string) (events
 }
 
 func compactReport(reportText string) (string, string, error) {
-	report, err := parseReportText(reportText)
+	report, err := parseReport(reportText)
 	if err != nil {
 		return "", "", err
 	}
@@ -66,8 +66,9 @@ func compactReport(reportText string) (string, string, error) {
 		"workload_size": report.WorkloadSize,
 		"rank":          report.Rank,
 		"node_name":     report.NodeName,
-		"result":        report.Result,
-		"check":         report.Checks,
+		"node_ip":       report.NodeIP,
+		"gpu_check":     report.GPUCheck,
+		"storage_check": report.StorageCheck,
 	}
 	if threshold, ok := raw["node_check_busbw_threshold_gbps"]; ok {
 		compact["node_check_busbw_threshold_gbps"] = threshold

@@ -40,7 +40,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load agent config: %w", err)
 	}
-	klog.Infof("agent config loaded: %s", cfg.String())
+	klog.InfoS("agent config loaded", "config", cfg.String())
 
 	hostName, err := hostName()
 	if err != nil {
@@ -78,10 +78,10 @@ func run() error {
 		return fmt.Errorf("start preflight pod observer: %w", err)
 	}
 
-	klog.Info("agent started")
+	klog.InfoS("agent started")
 	<-ctx.Done()
 
-	klog.Info("agent stopped")
+	klog.InfoS("agent stopped")
 	return nil
 }
 
