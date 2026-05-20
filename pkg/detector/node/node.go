@@ -30,7 +30,7 @@ type detector struct {
 
 func NewDetector(nodeName string, vendor Vendor, interval int, cfg config.MetaX, sink events.Sink) (runner.Runner, error) {
 	if sink == nil {
-		return nil, fmt.Errorf("event sink can not be nil")
+		return nil, fmt.Errorf("event sink cannot be nil")
 	}
 
 	var d detectorpkg.Detector

@@ -89,7 +89,7 @@ func ensureEventNamespace(ref *corev1.ObjectReference, event Event) {
 
 func (sink *kubeEventSink) recordStdEvent(ref *corev1.ObjectReference, event Event) error {
 	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, reasonForEvent(event), "%s", event.Message)
-	klog.V(3).InfoS("kube event sink recorded standard event", "kind", ref.Kind, "namespace", ref.Namespace, "name", ref.Name, "eventType", event.EventType)
+	klog.V(3).InfoS("record standard event", "kind", ref.Kind, "namespace", ref.Namespace, "name", ref.Name, "eventType", event.EventType)
 	return nil
 }
 
@@ -114,7 +114,7 @@ func (sink *kubeEventSink) recordPreflightEvent(ref *corev1.ObjectReference, eve
 	if err != nil {
 		return fmt.Errorf("create preflight event for %s: %w", ref.Name, err)
 	}
-	klog.V(3).InfoS("kube event sink recorded preflight event", "eventNamespace", evt.Namespace, "involvedName", ref.Name, "reason", evt.Reason, "workload", event.Annotations[constants.PreflightWorkloadAnnotation])
+	klog.V(3).InfoS("record preflight event", "eventNamespace", evt.Namespace, "involvedName", ref.Name, "reason", evt.Reason, "workload", event.Annotations[constants.PreflightWorkloadAnnotation])
 
 	return nil
 }

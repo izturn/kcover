@@ -186,3 +186,31 @@ func TestShouldWatchEventKeepsPodRecoveryLogic(t *testing.T) {
 		t.Fatal("shouldWatchEvent(pod recovery event) = false, want true")
 	}
 }
+
+func TestHandleK8sEventAddDropsWhenChannelIsFull(t *testing.T) {
+	t.Parallel()
+
+	bridge := NewKubeEventBridge(fake.NewSimpleClientset()).(*kubeEventBridge)
+	bridge.eventCh = make(chan Event, 1)
+	bridge.eventCh <- Event{ResourceType: Pod, Namespace: "default", Name: "existing", EventType: Error}
+
+	bridge.handleK8sEventAdd(&corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.Now(),
+			Annotations: map[string]string{
+				constants.NeedRecoveryAnnotation: constants.True,
+			},
+		},
+		Message:        "pod failed",
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Namespace: "default", Name: "pod-a"},
+	})
+
+	if len(bridge.eventCh) != 1 {
+		t.Fatalf("len(eventCh) = %d, want 1 when channel is full", len(bridge.eventCh))
+	}
+
+	evt := <-bridge.eventCh
+	if evt.Name != "existing" {
+		t.Fatalf("queued event name = %q, want existing", evt.Name)
+	}
+}

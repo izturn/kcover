@@ -22,6 +22,7 @@ type kubeEventBridge struct {
 }
 
 const eventMaxAge = 3 * time.Minute
+const bridgeEventBufferSize = 1
 
 var (
 	podObjectGVK  = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
@@ -33,7 +34,7 @@ func NewKubeEventBridge(cli kubernetes.Interface) Bridge {
 
 	return &kubeEventBridge{
 		kubeEventSink: sink,
-		eventCh:       make(chan Event),
+		eventCh:       make(chan Event, bridgeEventBufferSize),
 		stopCh:        make(chan struct{}),
 	}
 }
@@ -97,8 +98,15 @@ func (bridge *kubeEventBridge) handleK8sEventAdd(obj any) {
 		return
 	}
 
-	klog.V(3).InfoS("kube event bridge forwarded internal event", "resourceType", evt.ResourceType, "namespace", evt.Namespace, "name", evt.Name, "eventType", evt.EventType)
-	bridge.eventCh <- evt
+	klog.V(3).InfoS("forward internal event", "resourceType", evt.ResourceType, "namespace", evt.Namespace, "name", evt.Name, "eventType", evt.EventType)
+	select {
+	case <-bridge.stopCh:
+		return
+	case bridge.eventCh <- evt:
+		return
+	default:
+		klog.Warningf("kube event bridge dropped internal event: resourceType=%s namespace=%s name=%s eventType=%d", evt.ResourceType, evt.Namespace, evt.Name, evt.EventType)
+	}
 }
 
 func (bridge *kubeEventBridge) isExpiredEvent(event *corev1.Event, now time.Time) bool {
@@ -134,7 +142,7 @@ func (bridge *kubeEventBridge) toInternalPreflightEvent(event *corev1.Event) (Ev
 
 	payload, err := bridge.extractPreflightPayload(event)
 	if err != nil {
-		klog.ErrorS(err, "load preflight payload failed", "node", obj.Name)
+		klog.ErrorS(err, "failed to load preflight payload", "node", obj.Name)
 		return Event{}, false
 	}
 	return Event{
@@ -191,7 +199,6 @@ func isPodObjectRef(ref corev1.ObjectReference) bool {
 
 func (bridge *kubeEventBridge) Stop() {
 	close(bridge.stopCh)
-	close(bridge.eventCh)
 }
 
 func (bridge *kubeEventBridge) EventChan() <-chan Event {

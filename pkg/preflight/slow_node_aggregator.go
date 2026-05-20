@@ -125,7 +125,7 @@ func (c *SlowNodeAggregator) SetNowForTest(now func() time.Time) {
 // 当返回 ready=true 时，slowNodes 是完整聚合后的慢节点结论。
 func (c *SlowNodeAggregator) AddReport(ns, workloadName, reportText string) (ready bool, slowNodes []string, err error) {
 	if ns == "" || workloadName == "" {
-		return false, nil, fmt.Errorf("namespace or workload name is empty")
+		return false, nil, fmt.Errorf("namespace and workload name must not be empty")
 	}
 
 	report, plan, batchResults, err := extractNodeReport(reportText)

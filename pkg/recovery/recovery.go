@@ -59,16 +59,16 @@ func (r *RecoveryController) handlePreflightTimeout(timeoutErr preflight.Workloa
 }
 
 func (r *RecoveryController) onPodError(namespace, name string) {
-	klog.V(2).InfoS("start handling pod error", "namespace", namespace, "pod", name)
+	klog.V(2).InfoS("handle pod error", "namespace", namespace, "pod", name)
 	pod, err := r.client.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
-		klog.ErrorS(err, "get pod failed", "namespace", namespace, "pod", name)
+		klog.ErrorS(err, "failed to get pod", "namespace", namespace, "pod", name)
 		return
 	}
 
 	recoveryEnabled, err := r.isRecoveryEnabledForPod(pod)
 	if err != nil {
-		klog.ErrorS(err, "get recovery labels failed", "namespace", namespace, "pod", name)
+		klog.ErrorS(err, "failed to get recovery labels", "namespace", namespace, "pod", name)
 		return
 	}
 	if !recoveryEnabled {
@@ -130,7 +130,7 @@ func (r *RecoveryController) restartJob(ctx context.Context, namespace, name str
 		LabelSelector: fmt.Sprintf("%s=%s", constants.KubeflowJobLabel, name),
 	})
 	if err != nil {
-		klog.ErrorS(err, "restart job failed", "namespace", namespace, "job", name)
+		klog.ErrorS(err, "failed to restart job", "namespace", namespace, "job", name)
 	} else {
 		klog.InfoS("restarted job", "namespace", namespace, "job", name)
 	}
@@ -143,7 +143,7 @@ type nsName struct {
 
 func (r *RecoveryController) ensureNodeUnschedulable(name string) bool {
 	if err := kube.TaintNodeUnschedulable(context.Background(), r.client, name); err != nil {
-		klog.ErrorS(err, "mark node unschedulable failed", "node", name)
+		klog.ErrorS(err, "failed to mark node unschedulable", "node", name)
 		return false
 	}
 
@@ -152,10 +152,10 @@ func (r *RecoveryController) ensureNodeUnschedulable(name string) bool {
 }
 
 func (r *RecoveryController) onNodeError(e events.Event) {
-	klog.V(2).InfoS("start handling node error", "node", e.Name, "reason", e.Reason)
+	klog.V(2).InfoS("handle node error", "node", e.Name, "reason", e.Reason)
 	node, err := r.client.CoreV1().Nodes().Get(context.Background(), e.Name, metav1.GetOptions{})
 	if err != nil {
-		klog.ErrorS(err, "get node failed", "node", e.Name)
+		klog.ErrorS(err, "failed to get node", "node", e.Name)
 		return
 	}
 
@@ -165,14 +165,14 @@ func (r *RecoveryController) onNodeError(e events.Event) {
 	}
 
 	if e.Reason == events.Day2EventReason {
-		klog.V(2).InfoS("skip job recovery for day2 node event", "node", e.Name, "reason", e.Reason)
+		klog.V(2).InfoS("skip job recovery for day2 event", "node", e.Name, "reason", e.Reason)
 		r.ensureNodeUnschedulable(e.Name)
 		return
 	}
 
 	jobs, err := r.listJobsOnNode(e.Name)
 	if err != nil {
-		klog.ErrorS(err, "list jobs on node failed", "node", e.Name)
+		klog.ErrorS(err, "failed to list jobs on node", "node", e.Name)
 		return
 	}
 
@@ -212,7 +212,7 @@ func (r *RecoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
 }
 
 func (r *RecoveryController) onPreflightReport(namespace string, e events.Event) {
-	klog.V(2).InfoS("start handling preflight report event", "namespace", namespace, "node", e.Name, "annotations", e.Annotations, "messageBytes", len(e.Message))
+	klog.V(2).InfoS("handle preflight report", "namespace", namespace, "node", e.Name, "annotations", e.Annotations, "messageBytes", len(e.Message))
 
 	result, err := r.preflight.handleReport(e)
 	if err != nil {
@@ -221,22 +221,22 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 			r.handlePreflightTimeout(timeoutErr)
 			return
 		}
-		klog.ErrorS(err, "aggregate preflight report failed", "namespace", namespace, "node", e.Name)
+		klog.ErrorS(err, "failed to aggregate preflight report", "namespace", namespace, "node", e.Name)
 		return
 	}
 
 	if result.skipped && result.workloadName == "" {
-		klog.V(2).InfoS("skip preflight report", "namespace", namespace, "node", e.Name, "reason", "collector unavailable or workload annotation missing")
+		klog.V(2).InfoS("skip preflight report event", "namespace", namespace, "node", e.Name, "reason", "collector unavailable or workload annotation missing")
 		return
 	}
 
 	if result.duplicate {
-		klog.V(2).InfoS("skip duplicate preflight event", "namespace", namespace, "node", e.Name, "workload", result.workloadName)
+		klog.V(2).InfoS("skip duplicate preflight report", "namespace", namespace, "node", e.Name, "workload", result.workloadName)
 		return
 	}
 
 	if result.waiting {
-		klog.V(2).InfoS("received preflight report", "namespace", namespace, "workload", result.workloadName, "state", "waiting")
+		klog.V(2).InfoS("buffer preflight report", "namespace", namespace, "workload", result.workloadName, "state", "waiting")
 		return
 	}
 
@@ -264,16 +264,16 @@ func (r *RecoveryController) onEvent(e events.Event) {
 	switch e.ResourceType {
 	case events.Pod:
 		if e.EventType == events.Error {
-			klog.V(2).InfoS("dispatch event to pod recovery", "namespace", e.Namespace, "pod", e.Name)
+			klog.V(2).InfoS("dispatch pod event", "namespace", e.Namespace, "pod", e.Name)
 			r.onPodError(e.Namespace, e.Name)
 		}
 	case events.Node:
 		if events.IsPreflightEvent(e.Annotations) {
-			klog.V(2).InfoS("dispatch event to preflight tracker", "namespace", e.Namespace, "node", e.Name)
+			klog.V(2).InfoS("dispatch preflight event", "namespace", e.Namespace, "node", e.Name)
 			r.onPreflightReport(e.Namespace, e)
 			return
 		}
-		klog.V(2).InfoS("dispatch event to node recovery", "node", e.Name)
+		klog.V(2).InfoS("dispatch node event", "node", e.Name)
 		r.onNodeError(e)
 	default:
 		klog.ErrorS(nil, "unsupported event resource type", "resourceType", e.ResourceType)
@@ -282,7 +282,7 @@ func (r *RecoveryController) onEvent(e events.Event) {
 
 func (r *RecoveryController) Start() error {
 	if r.eventStream == nil {
-		return fmt.Errorf("event stream is nil")
+		return fmt.Errorf("event stream cannot be nil")
 	}
 	go func() {
 		ticker := time.NewTicker(r.preflightSweepInterval)
@@ -295,7 +295,11 @@ func (r *RecoveryController) Start() error {
 			case <-ticker.C:
 				r.sweepExpiredPreflightReports()
 
-			case e := <-r.eventStream.EventChan():
+			case e, ok := <-r.eventStream.EventChan():
+				if !ok {
+					klog.InfoS("recovery event stream closed")
+					return
+				}
 				r.onEvent(e)
 			}
 		}

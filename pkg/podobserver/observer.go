@@ -33,7 +33,7 @@ var _ runner.Runner = (*observer)(nil)
 
 func New(cli kubernetes.Interface, sink events.Sink, logName string, rules ...PodRule) (runner.Runner, error) {
 	if sink == nil {
-		return nil, fmt.Errorf("event sink can not be nil")
+		return nil, fmt.Errorf("event sink cannot be nil")
 	}
 
 	return &observer{
@@ -47,7 +47,7 @@ func New(cli kubernetes.Interface, sink events.Sink, logName string, rules ...Po
 
 func NewForNode(cli kubernetes.Interface, sink events.Sink, logName, nodeName string, rules ...PodRule) (runner.Runner, error) {
 	if nodeName == "" {
-		return nil, fmt.Errorf("observer node name can not be empty")
+		return nil, fmt.Errorf("observer node name cannot be empty")
 	}
 
 	runner, err := New(cli, sink, logName, rules...)

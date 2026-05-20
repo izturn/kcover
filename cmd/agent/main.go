@@ -40,7 +40,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load agent config: %w", err)
 	}
-	klog.V(2).InfoS("agent config loaded", "config", cfg.String())
+	klog.V(2).InfoS("load agent config", "config", cfg.String())
 
 	hostName, err := hostName()
 	if err != nil {
@@ -49,7 +49,7 @@ func run() error {
 
 	k8sConfig := kube.GetK8sConfigConfigWithFile("", "")
 	if k8sConfig == nil {
-		return fmt.Errorf("load kubernetes config: config is nil")
+		return fmt.Errorf("load Kubernetes config: returned nil config")
 	}
 
 	client, err := kubernetes.NewForConfig(k8sConfig)

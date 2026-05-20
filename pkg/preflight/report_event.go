@@ -34,7 +34,7 @@ func LoadReportPayload(baseDir, namespace, reportName string) (string, string, e
 	}
 
 	if nodeName == "" {
-		return "", "", fmt.Errorf("parse compacted %s: report node name is empty", path)
+		return "", "", fmt.Errorf("parse compacted %s: preflight report node name is empty", path)
 	}
 
 	return payload, nodeName, nil
