@@ -23,7 +23,11 @@ type kubeEventSink struct {
 	recorder record.EventRecorder
 }
 
-const preflightEventReason = "PreflightReportAvailable"
+const (
+	standardEventReason  = "Error"
+	preflightEventReason = "PreflightReportAvailable"
+	Day2EventReason      = "Day2CheckFailed"
+)
 
 func NewKubeEventSink(cli kubernetes.Interface) Sink {
 	return &kubeEventSink{
@@ -84,7 +88,7 @@ func ensureEventNamespace(ref *corev1.ObjectReference, event Event) {
 }
 
 func (sink *kubeEventSink) recordStdEvent(ref *corev1.ObjectReference, event Event) error {
-	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, "Error", "%s", event.Message)
+	sink.recorder.AnnotatedEventf(ref, annotationsForEvent(event), corev1.EventTypeWarning, reasonForEvent(event), "%s", event.Message)
 	klog.V(3).InfoS("kube event sink recorded standard event", "kind", ref.Kind, "namespace", ref.Namespace, "name", ref.Name, "eventType", event.EventType)
 	return nil
 }
@@ -118,10 +122,17 @@ func (sink *kubeEventSink) recordPreflightEvent(ref *corev1.ObjectReference, eve
 func preflightEventMessage(event Event) string {
 	workload := event.Annotations[constants.PreflightWorkloadAnnotation]
 	if workload == "" {
-		return fmt.Sprintf("preflight report available for node %s", event.Name)
+		return fmt.Sprintf("preflight report available for node(%s)", event.Name)
 	}
 
-	return fmt.Sprintf("preflight report available for workload %s on node %s", workload, event.Name)
+	return fmt.Sprintf("preflight report available for workload(%s) on node(%s)", workload, event.Name)
+}
+
+func reasonForEvent(event Event) string {
+	if event.Reason != "" {
+		return event.Reason
+	}
+	return standardEventReason
 }
 
 func annotationsForEvent(event Event) map[string]string {

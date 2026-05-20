@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/baizeai/kcover/pkg/constants"
@@ -130,7 +131,7 @@ func TestReportPath(t *testing.T) {
 func TestReportToEvent(t *testing.T) {
 	t.Parallel()
 
-	event, err := BuildEventFromReport("default", "node-a", "job-a", `{"version":1}`)
+	event, err := BuildEventFromReport("default", "node-a", "job-a", `{"version":1,"rank":0,"node_name":"node-a"}`)
 	if err != nil {
 		t.Fatalf("BuildEventFromReport() error = %v", err)
 	}
@@ -146,6 +147,12 @@ func TestReportToEvent(t *testing.T) {
 	if event.Annotations[constants.PreflightWorkloadAnnotation] != "job-a" {
 		t.Fatalf("workload annotation = %q, want %q", event.Annotations[constants.PreflightWorkloadAnnotation], "job-a")
 	}
+	if event.Annotations[constants.PreflightDedupKeyAnnotation] == "" {
+		t.Fatal("dedup annotation = empty, want non-empty")
+	}
+	if !strings.HasPrefix(event.Annotations[constants.PreflightDedupKeyAnnotation], "default/job-a/node-a/0/") {
+		t.Fatalf("dedup annotation = %q, want prefix %q", event.Annotations[constants.PreflightDedupKeyAnnotation], "default/job-a/node-a/0/")
+	}
 	if event.EventType != 0 {
 		t.Fatalf("event.EventType = %d, want 0", event.EventType)
 	}
@@ -154,7 +161,7 @@ func TestReportToEvent(t *testing.T) {
 func TestReportToEventRejectsEmptyWorkload(t *testing.T) {
 	t.Parallel()
 
-	_, err := BuildEventFromReport("default", "node-a", "", `{"version":1}`)
+	_, err := BuildEventFromReport("default", "node-a", "", `{"version":1,"rank":0,"node_name":"node-a"}`)
 	if err == nil {
 		t.Fatal("ReportToEvent() error = nil, want non-nil")
 	}

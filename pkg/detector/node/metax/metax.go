@@ -51,6 +51,7 @@ func (d *detector) day2Check() {
 	d.eventCh <- events.Event{
 		ResourceType: events.Node,
 		Name:         d.config.NodeName,
+		Reason:       events.Day2EventReason,
 		EventType:    events.Error,
 		Message:      err.Error(),
 	}
@@ -96,7 +97,7 @@ func (d *detector) Start() error {
 		for {
 			select {
 			case <-ticker.C:
-				//d.day2Check()
+				time.Sleep(1) // placeholder
 
 			case <-timer.C:
 				d.day2Check()

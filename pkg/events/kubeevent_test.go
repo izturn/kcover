@@ -46,8 +46,8 @@ func TestRecordEventStoresPreflightPayloadInEventAnnotation(t *testing.T) {
 	if stored.Reason != preflightEventReason {
 		t.Fatalf("event reason = %q, want %q", stored.Reason, preflightEventReason)
 	}
-	if stored.Message != "preflight report available for workload job-a on node node-a" {
-		t.Fatalf("event message = %q, want %q", stored.Message, "preflight report available for workload job-a on node node-a")
+	if stored.Message != "preflight report available for workload(job-a) on node(node-a)" {
+		t.Fatalf("event message = %q, want %q", stored.Message, "preflight report available for workload(job-a) on node(node-a)")
 	}
 	if stored.Annotations[constants.PreflightPayloadAnnotation] != payload {
 		t.Fatalf("event preflight payload annotation = %q, want %q", stored.Annotations[constants.PreflightPayloadAnnotation], payload)
@@ -96,5 +96,93 @@ func TestToInternalEventHydratesPreflightPayloadFromEventAnnotation(t *testing.T
 	}
 	if event.Annotations[constants.PreflightWorkloadAnnotation] != "job-a" {
 		t.Fatalf("job annotation = %q, want %q", event.Annotations[constants.PreflightWorkloadAnnotation], "job-a")
+	}
+}
+
+func TestReasonForEventUsesDay2ReasonForNodeEvent(t *testing.T) {
+	t.Parallel()
+
+	reason := reasonForEvent(Event{
+		ResourceType: Node,
+		Name:         "node-a",
+		Reason:       Day2EventReason,
+		EventType:    Error,
+		Message:      "day2 check failed",
+	})
+	if reason != Day2EventReason {
+		t.Fatalf("reasonForEvent(...) = %q, want %q", reason, Day2EventReason)
+	}
+}
+
+func TestShouldWatchEventAllowsPreflightNodeEvent(t *testing.T) {
+	t.Parallel()
+
+	bridge := NewKubeEventBridge(fake.NewSimpleClientset()).(*kubeEventBridge)
+
+	if !bridge.shouldWatchEvent(&corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.Now(),
+			Annotations: map[string]string{
+				constants.PreflightWorkloadAnnotation: "job-a",
+			},
+		},
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Node", Name: "node-a"},
+	}) {
+		t.Fatal("shouldWatchEvent(preflight node event) = false, want true")
+	}
+}
+
+func TestShouldWatchEventAllowsDay2NodeEvent(t *testing.T) {
+	t.Parallel()
+
+	bridge := NewKubeEventBridge(fake.NewSimpleClientset()).(*kubeEventBridge)
+
+	if !bridge.shouldWatchEvent(&corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.Now(),
+			Annotations: map[string]string{
+				constants.NeedRecoveryAnnotation: constants.True,
+			},
+		},
+		Reason:         Day2EventReason,
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Node", Name: "node-a"},
+	}) {
+		t.Fatal("shouldWatchEvent(day2 node event) = false, want true")
+	}
+}
+
+func TestShouldWatchEventRejectsNonDay2NodeRecoveryEvent(t *testing.T) {
+	t.Parallel()
+
+	bridge := NewKubeEventBridge(fake.NewSimpleClientset()).(*kubeEventBridge)
+
+	if bridge.shouldWatchEvent(&corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.Now(),
+			Annotations: map[string]string{
+				constants.NeedRecoveryAnnotation: constants.True,
+			},
+		},
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Node", Name: "node-a"},
+	}) {
+		t.Fatal("shouldWatchEvent(non-day2 node recovery event) = true, want false")
+	}
+}
+
+func TestShouldWatchEventKeepsPodRecoveryLogic(t *testing.T) {
+	t.Parallel()
+
+	bridge := NewKubeEventBridge(fake.NewSimpleClientset()).(*kubeEventBridge)
+
+	if !bridge.shouldWatchEvent(&corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.Now(),
+			Annotations: map[string]string{
+				constants.NeedRecoveryAnnotation: constants.True,
+			},
+		},
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Namespace: "default", Name: "pod-a"},
+	}) {
+		t.Fatal("shouldWatchEvent(pod recovery event) = false, want true")
 	}
 }

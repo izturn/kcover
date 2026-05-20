@@ -121,6 +121,16 @@ controller:
     - --preflight-report-collection-timeout=30m
 ```
 
+Controller leader election can also be toggled from chart values. Keep it
+enabled for multi-replica or HA deployments. Disable it only when you want a
+single controller instance to bypass Lease lock acquisition.
+
+```yaml
+controller:
+  leaderElection:
+    enabled: false
+```
+
 ## Image Build Notes
 
 The MetaX utility `mx-smi` is extracted into a dedicated image so that the

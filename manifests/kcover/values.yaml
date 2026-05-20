@@ -111,6 +111,13 @@ agent:
   affinity: {}
 
 controller:
+  leaderElection:
+    # Whether the controller should acquire and renew the Lease lock.
+    # Default is true and should be kept for HA or multi-replica deployments.
+    # Set to false only when you explicitly want a single controller instance
+    # to run without leader election.
+    enabled: true
+
   image:
     registry: ''
     repository: baizeai/kcover-controller
@@ -122,6 +129,8 @@ controller:
 
   replicas: 1
   # Additional CLI args for kcover-controller process.
+  # The chart injects --leader-elect automatically from
+  # controller.leaderElection.enabled, so do not repeat it here.
   # Default enables preflight aggregation with the standard timeout and keeps only essential info logs.
   # Example for day2 debugging:
   # args:

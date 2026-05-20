@@ -42,6 +42,11 @@ spec:
           {{- with .Values.controller.args }}
           args:
             {{- toYaml . | nindent 12 }}
+            - --leader-elect={{ $.Values.controller.leaderElection.enabled }}
+          {{- end }}
+          {{- if not .Values.controller.args }}
+          args:
+            - --leader-elect={{ .Values.controller.leaderElection.enabled }}
           {{- end }}
           env:
             # NODE_NAME is the canonical env var. FAST_RECOVERY_NODE_NAME remains

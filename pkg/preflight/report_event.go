@@ -1,6 +1,8 @@
 package preflight
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +11,11 @@ import (
 	"github.com/baizeai/kcover/pkg/constants"
 	"github.com/baizeai/kcover/pkg/events"
 )
+
+type compactReportPayload struct {
+	report Report
+	raw    map[string]any
+}
 
 func ReportPath(baseDir, namespace, reportName string) string {
 	return filepath.Join(baseDir, namespace, reportName+".json")
@@ -38,31 +45,73 @@ func BuildEventFromReport(namespace, nodeName, workloadName, reportText string) 
 		return events.Event{}, fmt.Errorf("preflight workload name is empty")
 	}
 
-	annotations := map[string]string{
-		constants.PreflightWorkloadAnnotation: workloadName,
+	report, err := parseReport(reportText)
+	if err != nil {
+		return events.Event{}, fmt.Errorf("parse preflight report: %w", err)
 	}
 
-	event := events.Event{
+	return buildEventFromParsedReport(namespace, nodeName, workloadName, report, reportText), nil
+}
+
+func buildEventFromParsedReport(namespace, nodeName, workloadName string, report Report, reportText string) events.Event {
+	annotations := map[string]string{
+		constants.PreflightWorkloadAnnotation: workloadName,
+		constants.PreflightDedupKeyAnnotation: eventDedupKeyForReport(namespace, nodeName, workloadName, report, reportText),
+	}
+
+	return events.Event{
 		ResourceType: events.Node,
 		Namespace:    namespace,
 		Name:         nodeName,
 		Annotations:  annotations,
 		Message:      reportText,
 	}
+}
 
-	return event, nil
+func EventDedupKey(namespace, nodeName, workloadName, reportText string) string {
+	report, err := parseReport(reportText)
+	if err != nil {
+		return eventDedupKey(namespace, nodeName, workloadName, 0, reportText)
+	}
+
+	return eventDedupKeyForReport(namespace, nodeName, workloadName, report, reportText)
+}
+
+func eventDedupKeyForReport(namespace, nodeName, workloadName string, report Report, reportText string) string {
+	return eventDedupKey(namespace, nodeName, workloadName, report.Rank, reportText)
+}
+
+func eventDedupKey(namespace, nodeName, workloadName string, rank int, reportText string) string {
+	sum := sha256.Sum256([]byte(reportText))
+	return fmt.Sprintf("%s/%s/%s/%d/%s", namespace, workloadName, nodeName, rank, hex.EncodeToString(sum[:]))
 }
 
 func CompactReport(reportText string) (string, string, error) {
-	report, err := parseReport(reportText)
+	payload, err := parseCompactReportPayload(reportText)
 	if err != nil {
 		return "", "", err
 	}
 
+	return compactReportPayloadToJSON(payload)
+}
+
+func parseCompactReportPayload(reportText string) (compactReportPayload, error) {
+	report, err := parseReport(reportText)
+	if err != nil {
+		return compactReportPayload{}, err
+	}
+
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(reportText), &raw); err != nil {
-		return "", "", fmt.Errorf("unmarshal preflight payload: %w", err)
+		return compactReportPayload{}, fmt.Errorf("unmarshal preflight payload: %w", err)
 	}
+
+	return compactReportPayload{report: report, raw: raw}, nil
+}
+
+func compactReportPayloadToJSON(payload compactReportPayload) (string, string, error) {
+	report := payload.report
+	raw := payload.raw
 
 	compact := map[string]any{
 		"workload_size": report.WorkloadSize,

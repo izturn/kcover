@@ -10,6 +10,7 @@ const (
 	// a preflight report event.
 	PreflightNamespaceAnnotation = "kcover.io/preflight-namespace"
 	PreflightPayloadAnnotation   = "kcover.io/preflight-payload"
+	PreflightDedupKeyAnnotation  = "kcover.io/preflight-dedup-key"
 	// PreflightWorkloadAnnotation carries the training or inference workload name
 	// associated with a preflight report event.
 	PreflightWorkloadAnnotation = "kcover.io/preflight-workload"

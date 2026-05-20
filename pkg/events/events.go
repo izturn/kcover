@@ -24,6 +24,7 @@ type Event struct {
 	ResourceType
 	Namespace   string
 	Name        string
+	Reason      string
 	Annotations map[string]string
 
 	EventType

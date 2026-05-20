@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 type nodeName string
@@ -161,10 +163,16 @@ func (c *SlowNodeAggregator) AddReport(ns, workloadName, reportText string) (rea
 			wkl.expectedBatchCount,
 		)
 	}
+
+	failFast := report.GPUCheck == CheckResultFail || report.StorageCheck == CheckResultFail
+	if !failFast && len(batchResults) == 0 {
+		klog.Warningf("preflight report has no batch results, falling back to fail-fast: namespace=%s workload=%s node=%s workloadSize=%d", ns, workloadName, report.NodeName, report.WorkloadSize)
+		failFast = true
+	}
 	np := nodeReport{
 		nodeName:     nodeName(report.NodeName),
 		selfIP:       nodeIP(report.NodeIP),
-		failFast:     report.GPUCheck == CheckResultFail || report.StorageCheck == CheckResultFail,
+		failFast:     failFast,
 		batchResults: batchResults}
 	wkl.nodeReports[nodeName(report.NodeName)] = np
 	wkl.lastReportAt = now
@@ -181,7 +189,10 @@ func (c *SlowNodeAggregator) AddReport(ns, workloadName, reportText string) (rea
 
 func (c *SlowNodeAggregator) expireWorkloadIfTimedOut(key workloadKey, now time.Time) (WorkloadTimeoutError, bool) {
 	workload, ok := c.workloads[key]
-	if !ok || len(workload.nodeReports) >= workload.expectedReportCount {
+	if !ok {
+		return WorkloadTimeoutError{}, false
+	}
+	if len(workload.nodeReports) >= workload.expectedReportCount {
 		return WorkloadTimeoutError{}, false
 	}
 	if workload.lastReportAt.Add(c.timeout).After(now) {
@@ -448,6 +459,41 @@ func unmarshalReportPayload(txt string) (map[string]any, error) {
 	return payload, nil
 }
 
+/*
+# 状态值
+# 0: SKIP
+# 1: PASS（已经执行且通过）
+# 2: FAIL（已经执行但失败）
+
+	{
+	  "version": 1,
+	  "workload": "demo-train",
+	  "workload_size": 4,
+	  "rank": 0,
+	  "node_name": "node-7",
+	  "storage_check": 1,
+	  "gpu_check": 1,
+	  "node_check_busbw_threshold_gbps": "12.5",
+	  "batches": [
+	    {
+	      "batch_idx": 0,
+	      "pair": ["10.0.0.7", "10.0.0.8"],
+	      "self_ip": "10.0.0.7",
+	      "status": "ok",
+	      "allreduce_ms": 12.345,
+	      "world_size": 16,
+	      "allreduce_shape": 268435456,
+	      "dtype_bytes": 4,
+	    },
+	    {
+	      "batch_idx": 1,
+	      "pair": ["10.0.0.7", "10.0.0.9"],
+	      "self_ip": "10.0.0.7",
+	      "status": "fail",
+	    }
+	  ]
+	}
+*/
 func extractBatchResults(payload map[string]any, report Report, plan workloadPlan, busBWThresholdGBPS float64) (map[batchIndex]batchResult, error) {
 	batchRaw, _ := payload["batches"].([]any)
 

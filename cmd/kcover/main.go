@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/baizeai/kcover/pkg/detector/pod"
@@ -36,6 +38,18 @@ var preflightSweepInterval = flag.Duration(
 	recovery.DefaultPreflightSweepInterval,
 	"interval for sweeping expired preflight report aggregations",
 )
+
+var leaderElect = flag.Bool(
+	"leader-elect",
+	true,
+	"enable leader election for the controller",
+)
+
+type controllerConfig struct {
+	reportCollectionTimeout time.Duration
+	sweepInterval           time.Duration
+	leaderElectionEnabled   bool
+}
 
 func mustHostName() string {
 	if nodeName := kube.NodeNameFromEnv(); nodeName != "" {
@@ -105,10 +119,16 @@ func makeElectionCallback(reportCollectionTimeout, sweepInterval time.Duration) 
 		}
 }
 
-func main() {
-	flag.Parse()
-	started, stopped := makeElectionCallback(*preflightReportCollectionTimeout, *preflightSweepInterval)
-	leaderElectionConfig := leaderelection.LeaderElectionConfig{
+func runtimeConfig() controllerConfig {
+	return controllerConfig{
+		reportCollectionTimeout: *preflightReportCollectionTimeout,
+		sweepInterval:           *preflightSweepInterval,
+		leaderElectionEnabled:   *leaderElect,
+	}
+}
+
+func leaderElectionConfig(started func(context.Context), stopped func()) leaderelection.LeaderElectionConfig {
+	return leaderelection.LeaderElectionConfig{
 		Lock:            lock(mustHostName()),
 		ReleaseOnCancel: true,
 		LeaseDuration:   15 * time.Second,
@@ -119,5 +139,24 @@ func main() {
 			OnStoppedLeading: stopped,
 		},
 	}
-	leaderelection.RunOrDie(context.Background(), leaderElectionConfig)
+}
+
+func run(ctx context.Context, cfg controllerConfig) {
+	started, stopped := makeElectionCallback(cfg.reportCollectionTimeout, cfg.sweepInterval)
+	if !cfg.leaderElectionEnabled {
+		started(ctx)
+		<-ctx.Done()
+		stopped()
+		return
+	}
+
+	leaderelection.RunOrDie(ctx, leaderElectionConfig(started, stopped))
+}
+
+func main() {
+	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	run(ctx, runtimeConfig())
 }

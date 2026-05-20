@@ -53,9 +53,7 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 		return nil
 	}
 
-	// Temporarily bypass file-backed report loading and use in-memory reports keyed by node name.
-	// reportText, nodeName, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
-	reportText, nodeName, err := compactReportFromNodeName(nodeName)
+	reportText, nodeName, err := preflight.LoadReportPayload(r.baseDir, newPod.Namespace, reportName)
 	if err != nil {
 		klog.V(4).InfoS("load preflight report failed", "namespace", newPod.Namespace, "pod", newPod.Name, "report", reportName, "node", nodeName, "error", err)
 		return nil
@@ -73,15 +71,6 @@ func (r preflightRule) OnUpdate(oldPod, newPod *corev1.Pod) []events.Event {
 	klog.V(3).InfoS("prepared preflight delivery event", "namespace", event.Namespace, "pod", newPod.Name, "node", event.Name, "workload", workloadName)
 
 	return []events.Event{event}
-}
-
-func compactReportFromNodeName(nodeName string) (string, string, error) {
-	rawReport, ok := reports[nodeName]
-	if !ok {
-		return "", "", fmt.Errorf("report for node %q not found", nodeName)
-	}
-
-	return preflight.CompactReport(rawReport)
 }
 
 func preflightWorkloadName(pod *corev1.Pod) string {

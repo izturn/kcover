@@ -42,8 +42,11 @@ func (bridge *kubeEventBridge) Start() error {
 	factory := informers.NewSharedInformerFactory(bridge.client, 0)
 	informer := factory.Core().V1().Events().Informer()
 
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: bridge.handleK8sEventAdd,
+	_, err := informer.AddEventHandler(cache.FilteringResourceEventHandler{
+		FilterFunc: bridge.shouldWatchEvent,
+		Handler: cache.ResourceEventHandlerFuncs{
+			AddFunc: bridge.handleK8sEventAdd,
+		},
 	})
 	if err != nil {
 		return err
@@ -52,6 +55,31 @@ func (bridge *kubeEventBridge) Start() error {
 	go informer.Run(bridge.stopCh)
 	klog.InfoS("kube event bridge started")
 	return nil
+}
+
+func (bridge *kubeEventBridge) shouldWatchEvent(obj any) bool {
+	event, ok := obj.(*corev1.Event)
+	if !ok {
+		return false
+	}
+
+	if bridge.isExpiredEvent(event, time.Now()) {
+		return false
+	}
+
+	if IsPreflightEvent(event.Annotations) {
+		return true
+	}
+
+	if event.Annotations[constants.NeedRecoveryAnnotation] != constants.True {
+		return false
+	}
+
+	if isNodeObjectRef(event.InvolvedObject) {
+		return event.Reason == Day2EventReason
+	}
+
+	return isPodObjectRef(event.InvolvedObject)
 }
 
 func (bridge *kubeEventBridge) handleK8sEventAdd(obj any) {
