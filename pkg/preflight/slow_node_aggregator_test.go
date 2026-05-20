@@ -114,6 +114,15 @@ func TestIntersectFailedNodeIPsReturnsSharedNodeAcrossAllFailedBatches(t *testin
 	}
 }
 
+func TestIntersectFailedNodeIPsReturnsNilForEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	actual := intersectFailedNodeIPs(map[batchIndex]nodeIPSet{}, nil)
+	if actual != nil {
+		t.Fatalf("intersectFailedNodeIPs(empty, nil) = %v, want nil", actual)
+	}
+}
+
 func TestIntersectFailedNodeIPsResolvesNodeNames(t *testing.T) {
 	t.Parallel()
 

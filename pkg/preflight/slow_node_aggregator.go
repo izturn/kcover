@@ -377,6 +377,10 @@ func failedNodeIPsByBatch(nodeReports map[nodeName]nodeReport) map[batchIndex]no
 // all batches. When an IP can be resolved to a node name, the node name is
 // returned; otherwise the original IP is kept for diagnostics.
 func intersectFailedNodeIPs(failedNodeIPsByBatch map[batchIndex]nodeIPSet, nodeIPToName map[nodeIP]nodeName) []string {
+	if len(failedNodeIPsByBatch) == 0 {
+		return nil
+	}
+
 	// 先取出所有出现过失败 pair 的 batch，并按 batch_idx 排序，保证交集计算顺序稳定。
 	batchIndexes := make([]batchIndex, 0, len(failedNodeIPsByBatch))
 	for batchIdx := range failedNodeIPsByBatch {
