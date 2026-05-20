@@ -23,7 +23,7 @@ type RecoveryController struct {
 	eventStream            events.Stream
 	eventSink              events.Sink
 	stopCh                 chan struct{}
-	preflight              *preflightState
+	preflight              *preflightTracker
 	preflightSweepInterval time.Duration
 	restartDuration        time.Duration
 	restarts               *ttlcache.Cache[string, time.Time]
@@ -41,7 +41,7 @@ func NewController(cli kubernetes.Interface, stream events.Stream, preflightRepo
 		eventStream:            stream,
 		eventSink:              events.NewKubeEventSink(cli),
 		stopCh:                 make(chan struct{}),
-		preflight:              newPreflightState(preflightReportCollectionTimeout),
+		preflight:              newPreflightTracker(preflightReportCollectionTimeout),
 		preflightSweepInterval: preflightSweepInterval,
 		restartDuration:        time.Second * 30,
 		restarts:               ttlcache.New[string, time.Time](),
@@ -51,7 +51,7 @@ func NewController(cli kubernetes.Interface, stream events.Stream, preflightRepo
 func (r *RecoveryController) handlePreflightTimeout(timeoutErr preflight.WorkloadTimeoutError) {
 	anchorNode := timeoutErr.FirstReportedNode()
 	if anchorNode == "" {
-		klog.V(2).InfoS("skip preflight aggregation timeout report", "namespace", timeoutErr.Namespace, "workload", timeoutErr.WorkloadName, "reason", "no reported nodes")
+		klog.ErrorS(nil, "preflight aggregation timeout", "namespace", timeoutErr.Namespace, "workload", timeoutErr.WorkloadName, "timeout", timeoutErr.Timeout, "receivedReports", timeoutErr.ReceivedReports, "expectedReports", timeoutErr.ExpectedReports, "reason", "no reported nodes")
 		return
 	}
 
@@ -245,6 +245,8 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 		return
 	}
 
+	klog.InfoS("preflight report finished with slow nodes", "namespace", namespace, "workload", result.workloadName, "slowNodes", result.slowNodes)
+
 	for _, node := range result.slowNodes {
 		klog.V(2).InfoS("preflight marked slow node", "node", node, "namespace", namespace, "workload", result.workloadName)
 		r.ensureNodeUnschedulable(node)
@@ -254,7 +256,6 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 func (r *RecoveryController) sweepExpiredPreflightReports() {
 	for _, err := range r.preflight.sweepExpired() {
 		r.handlePreflightTimeout(err)
-		klog.ErrorS(err, "expire stale preflight aggregation failed")
 	}
 }
 
@@ -268,7 +269,7 @@ func (r *RecoveryController) onEvent(e events.Event) {
 		}
 	case events.Node:
 		if events.IsPreflightEvent(e.Annotations) {
-			klog.V(2).InfoS("dispatch event to preflight aggregator", "namespace", e.Namespace, "node", e.Name)
+			klog.V(2).InfoS("dispatch event to preflight tracker", "namespace", e.Namespace, "node", e.Name)
 			r.onPreflightReport(e.Namespace, e)
 			return
 		}
