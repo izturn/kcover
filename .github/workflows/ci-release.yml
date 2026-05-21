@@ -65,7 +65,7 @@ jobs:
           labels: ${{ steps.controller_meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: docker/controller.Dockerfile
+          file: docker/kcover.Dockerfile
 
       - name: Build Image Agent
         uses: docker/build-push-action@v4
