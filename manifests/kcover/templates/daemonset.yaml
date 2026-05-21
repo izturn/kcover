@@ -31,11 +31,32 @@ spec:
             {{- toYaml .Values.agent.securityContext | nindent 12 }}
           image: {{ template "agent.image" . }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          args:
+            - --config={{ .Values.agent.config.path }}
+          {{- with .Values.agent.args }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
-            - name: FAST_RECOVERY_NODE_NAME
+            # NODE_NAME is the canonical env var. FAST_RECOVERY_NODE_NAME remains
+            # backward-compatible in code for older deployments during migration.
+            - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   apiVersion: v1
                   fieldPath: spec.nodeName
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: agent-config
+              mountPath: {{ dir .Values.agent.config.path }}
+              readOnly: true
+          {{- with .Values.agent.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: agent-config
+          configMap:
+            name: {{ include "kcover.agentConfigMapName" . }}
+        {{- with .Values.agent.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,13 +1,15 @@
 package events
 
-import "github.com/baizeai/kcover/pkg/runner"
+import (
+	"github.com/baizeai/kcover/pkg/constants"
+	"github.com/baizeai/kcover/pkg/runner"
+)
 
-type TargetType string
+type ResourceType string
 
 const (
-	Pod    TargetType = "pod"
-	Node   TargetType = "node"
-	Device TargetType = "device"
+	Pod  ResourceType = "pod"
+	Node ResourceType = "node"
 )
 
 type EventType int
@@ -18,16 +20,45 @@ const (
 	Warning
 )
 
-type CollectorEvent struct {
-	TargetType
-	Namespace string
-	Name      string
+type Event struct {
+	ResourceType
+	Namespace   string
+	Name        string
+	Reason      string
+	Annotations map[string]string
+
 	EventType
 	Message string
 }
 
-type Recorder interface {
+type Bridge interface {
 	runner.Runner
-	RecordEvent(e CollectorEvent) error
-	EventChan() <-chan CollectorEvent
+
+	Sink
+	Stream
+}
+
+type Sink interface {
+	RecordEvent(e Event) error
+}
+
+type Stream interface {
+	EventChan() <-chan Event
+}
+
+func IsPreflightEvent(annotations map[string]string) bool {
+	return annotations[constants.PreflightWorkloadAnnotation] != ""
+}
+
+func copyAnnotations(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+
+	return dst
 }

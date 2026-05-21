@@ -1,11 +1,70 @@
 package kube
 
 import (
+	"context"
 	"os"
+	"slices"
+	"strings"
 
+	"github.com/baizeai/kcover/pkg/constants"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+const UnschedulableNodeTaintKey = "node.kubernetes.io/unschedulable"
+
+var serviceAccountNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+func NodeNameFromEnv() string {
+	if nodeName := os.Getenv(constants.NodeNameEnv); nodeName != "" {
+		return nodeName
+	}
+
+	return os.Getenv(constants.LegacyNodeNameEnv)
+}
+
+func CurrentNamespace() string {
+	if data, err := os.ReadFile(serviceAccountNamespacePath); err == nil {
+		if namespace := strings.TrimSpace(string(data)); namespace != "" {
+			return namespace
+		}
+	}
+
+	return "default"
+}
+
+func TaintNodeUnschedulable(ctx context.Context, cli kubernetes.Interface, nodeName string) error {
+	node, err := cli.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	taint := corev1.Taint{
+		Key:    UnschedulableNodeTaintKey,
+		Effect: corev1.TaintEffectNoSchedule,
+	}
+
+	changed := !node.Spec.Unschedulable
+	node.Spec.Unschedulable = true
+
+	if slices.IndexFunc(node.Spec.Taints, func(existing corev1.Taint) bool {
+		return existing.Key == taint.Key && existing.Effect == taint.Effect
+	}) == -1 {
+		node.Spec.Taints = append(node.Spec.Taints, taint)
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+
+	_, err = cli.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
+	return err
+}
 
 func GetK8sConfigConfigWithFile(kubeconfig, context string) *rest.Config {
 	var config *rest.Config

@@ -32,11 +32,26 @@ spec:
       securityContext:
         {{- toYaml .Values.controller.podSecurityContext | nindent 8 }}
       containers:
-        - name: controller-container
+        - name: controller
           image: {{ template "controller.image" . }}
           imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          {{- with .Values.controller.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.controller.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+            - --leader-elect={{ $.Values.controller.leaderElection.enabled }}
+          {{- end }}
+          {{- if not .Values.controller.args }}
+          args:
+            - --leader-elect={{ .Values.controller.leaderElection.enabled }}
+          {{- end }}
           env:
-            - name: FAST_RECOVERY_NODE_NAME
+            # NODE_NAME is the canonical env var. FAST_RECOVERY_NODE_NAME remains
+            # backward-compatible in code for older deployments during migration.
+            - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   apiVersion: v1

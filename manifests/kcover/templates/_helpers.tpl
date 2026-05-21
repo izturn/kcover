@@ -68,3 +68,11 @@ Create the name of the service account to use
 {{- define "agent.image" -}}
 {{ include "common.images.image" (dict "imageRoot" .Values.agent.image "global" .Values.global "defaultTag" .Chart.Version) }}
 {{- end -}}
+
+{{- define "kcover.agentConfigMapName" -}}
+{{- if .Values.agent.config.existingConfigMap -}}
+{{- .Values.agent.config.existingConfigMap -}}
+{{- else -}}
+{{- printf "%s-agent-config" (include "kcover.fullname" .) -}}
+{{- end -}}
+{{- end -}}

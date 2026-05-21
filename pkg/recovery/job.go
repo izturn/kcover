@@ -27,19 +27,20 @@ func getPodRelatedJobLabels(cli kubernetes.Interface, pod *corev1.Pod) (map[stri
 	switch owner.Kind {
 	case "PyTorchJob":
 		resource = "pytorchjobs"
+
 	case "TFJob":
 		resource = "tfjobs"
 	}
 
-	un := unstructured.Unstructured{}
+	unstr := unstructured.Unstructured{}
 	err := cli.Discovery().RESTClient().Get().
 		AbsPath(fmt.Sprintf("/apis/%s/namespaces/%s/%s/%s", owner.APIVersion, pod.Namespace, resource, owner.Name)).
-		Do(context.Background()).Into(&un)
+		Do(context.Background()).Into(&unstr)
 	if err != nil {
 		return nil, err
 	}
 
-	ls := un.GetLabels()
+	ls := unstr.GetLabels()
 	ttlCache.Set(string(owner.UID), ls, time.Second*30)
 
 	return ls, nil

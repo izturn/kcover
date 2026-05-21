@@ -20,6 +20,26 @@ global:
   imageRegistry: ghcr.io
 
 agent:
+  # Additional CLI args for kcover-agent process (for example: ["-v=2"]).
+  # --config is always injected by the chart and does not need to be repeated here.
+  # Default to info-only logs; set -v=2/-v=4 for debug details.
+  args:
+    - -v=0
+
+  config:
+    existingConfigMap: "" # 留空时自动创建；设置后直接挂载用户自定义 ConfigMap
+    path: /etc/kcover-agent/config.yaml
+    data:
+      vendor: 1
+      interval: 5 # 以秒为单位的诊断间隔
+      metaX:
+        hcaIDs: [] # 需要使用ibv_devinfo检查,状态为 PORT_ACTIVE 的 HCA ID 列表，例如 ["mlx5_0", "mlx5_1"]
+        day2CheckHour: 10 # 每天检查时间，24小时制，默认为 10 点
+        gpuNum: 8 # 最少可用 GPU 数量阈值
+        temperature: 85 # hotspot 温度上限，单位摄氏度，默认 85 度
+        eccMaxCount: 64 # 每张卡允许的 Double Bit ECC 最大值
+        ntpMaxOffsetMillis: 10 # NTP 时间偏差上限，单位毫秒
+
   image:
     registry: ''
     repository: baizeai/kcover-agent
@@ -33,7 +53,8 @@ agent:
   podLabels: {}
   podSecurityContext: {}
     # fsGroup: 2000
-  securityContext: {}
+  securityContext:
+    privileged: true
     # capabilities:
     #   drop:
     #   - ALL
@@ -61,14 +82,26 @@ agent:
     # targetMemoryUtilizationPercentage: 80
 
   # Additional volumes on the output Deployment definition.
-  volumes: []
+  volumes:
+    - name: infiniband
+      hostPath:
+        path: /dev/infiniband
+        type: DirectoryOrCreate
+    - name: preflight-report
+      hostPath:
+        path: /var/lib/kcover/preflight
+        type: DirectoryOrCreate
   # - name: foo
   #   secret:
   #     secretName: mysecret
   #     optional: false
 
   # Additional volumeMounts on the output Deployment definition.
-  volumeMounts: []
+  volumeMounts:
+    - name: infiniband
+      mountPath: /dev/infiniband
+    - name: preflight-report
+      mountPath: /var/lib/kcover/preflight
   # - name: foo
   #   mountPath: "/etc/foo"
   #   readOnly: true
@@ -78,6 +111,13 @@ agent:
   affinity: {}
 
 controller:
+  leaderElection:
+    # Whether the controller should acquire and renew the Lease lock.
+    # Default is true and should be kept for HA or multi-replica deployments.
+    # Set to false only when you explicitly want a single controller instance
+    # to run without leader election.
+    enabled: true
+
   image:
     registry: ''
     repository: baizeai/kcover-controller
@@ -88,6 +128,19 @@ controller:
   imagePullSecrets: []
 
   replicas: 1
+  # Additional CLI args for kcover-controller process.
+  # The chart injects --leader-elect automatically from
+  # controller.leaderElection.enabled, so do not repeat it here.
+  # Default enables preflight aggregation with the standard timeout and keeps only essential info logs.
+  # Example for day2 debugging:
+  # args:
+  #   - --preflight-report-collection-timeout=30m
+  #   - -v=2
+  command:
+    - /app/kcover-controller
+  args:
+    - --preflight-report-collection-timeout=30m
+    - -v=0
   podAnnotations: {}
   podLabels: {}
   podSecurityContext: {}
