@@ -137,9 +137,9 @@ The MetaX utility `mx-smi` is extracted into a dedicated image so that the
 agent image no longer needs to reference the full `maca-pytorch` runtime
 directly.
 
-- Extracted image: `release-ci.daocloud.io/baize/mx-smi:v0.1`
+- Extracted image: `ghcr.io/baizeai/mx-smi:v0.1`
 - Agent base runtime: `ubuntu:24.04`
-- Agent build arg: `MX_SMI_IMAGE=release-ci.daocloud.io/baize/mx-smi:v0.1`
+- Agent build arg: `MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.1`
 
 Build and push the extracted `mx-smi` image:
 
@@ -156,6 +156,6 @@ make image-agent
 If you need to build manually, use:
 
 ```shell
-docker build -f docker/mx-smi.Dockerfile -t release-ci.daocloud.io/baize/mx-smi:v0.1 .
-docker build -f docker/agent.Dockerfile --build-arg MX_SMI_IMAGE=release-ci.daocloud.io/baize/mx-smi:v0.1 -t release-ci.daocloud.io/baize/kcover-agent:<tag> .
+docker build -f docker/mx-smi.Dockerfile -t ghcr.io/baizeai/mx-smi:v0.1 .
+docker build -f docker/agent.Dockerfile --build-arg MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.1 -t ghcr.io/baizeai/kcover-agent:<tag> .
 ```

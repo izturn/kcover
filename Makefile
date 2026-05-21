@@ -7,7 +7,7 @@ VERSION ?= dev-$(shell git rev-parse --short=8 HEAD)
 
 BUILD_PLATFORM ?= linux/amd64
 PUSH_PLATFORMS ?= linux/amd64,linux/arm64
-MX_SMI_IMAGE ?= $(HUB)/mx-smi:v0.1
+MX_SMI_IMAGE ?= ghcr.io/baizeai/mx-smi:v0.1
 
 build-controller:
 	$(CONTAINER_CLI) buildx build \
@@ -27,13 +27,13 @@ push-controller:
 
 build-mx-smi:
 	$(CONTAINER_CLI) build \
-		-t $(HUB)/mx-smi:v0.1 \
+		-t $(MX_SMI_IMAGE) \
 		-f docker/mx-smi.Dockerfile \
 		--platform linux/amd64 \
 		.
 
 push-mx-smi: build-mx-smi
-	$(CONTAINER_CLI) push $(HUB)/mx-smi:v0.1
+	$(CONTAINER_CLI) push $(MX_SMI_IMAGE)
 
 image-mx-smi: push-mx-smi
 
