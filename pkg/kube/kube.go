@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 )
 
 const UnschedulableNodeTaintKey = "node.kubernetes.io/unschedulable"
@@ -38,32 +39,34 @@ func CurrentNamespace() string {
 }
 
 func TaintNodeUnschedulable(ctx context.Context, cli kubernetes.Interface, nodeName string) error {
-	node, err := cli.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-
 	taint := corev1.Taint{
 		Key:    UnschedulableNodeTaintKey,
 		Effect: corev1.TaintEffectNoSchedule,
 	}
 
-	changed := !node.Spec.Unschedulable
-	node.Spec.Unschedulable = true
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		node, err := cli.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
 
-	if slices.IndexFunc(node.Spec.Taints, func(existing corev1.Taint) bool {
-		return existing.Key == taint.Key && existing.Effect == taint.Effect
-	}) == -1 {
-		node.Spec.Taints = append(node.Spec.Taints, taint)
-		changed = true
-	}
+		changed := !node.Spec.Unschedulable
+		node.Spec.Unschedulable = true
 
-	if !changed {
-		return nil
-	}
+		if slices.IndexFunc(node.Spec.Taints, func(existing corev1.Taint) bool {
+			return existing.Key == taint.Key && existing.Effect == taint.Effect
+		}) == -1 {
+			node.Spec.Taints = append(node.Spec.Taints, taint)
+			changed = true
+		}
 
-	_, err = cli.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
-	return err
+		if !changed {
+			return nil
+		}
+
+		_, err = cli.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 func GetK8sConfigConfigWithFile(kubeconfig, context string) *rest.Config {

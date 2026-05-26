@@ -2,14 +2,19 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/baizeai/kcover/pkg/constants"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 func TestNodeNameFromEnvPrefersNodeName(t *testing.T) {
@@ -112,6 +117,38 @@ func TestTaintNodeUnschedulableDoesNotDuplicateTaint(t *testing.T) {
 	node, err := cli.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get(node-a) error = %v", err)
+	}
+	if len(node.Spec.Taints) != 1 {
+		t.Fatalf("len(node.Spec.Taints) = %d, want 1", len(node.Spec.Taints))
+	}
+}
+
+func TestTaintNodeUnschedulableRetriesOnConflict(t *testing.T) {
+	t.Parallel()
+
+	cli := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	updateCalls := 0
+	cli.Fake.PrependReactor("update", "nodes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		updateCalls++
+		if updateCalls == 1 {
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "nodes"}, "node-a", errors.New("simulated conflict"))
+		}
+		return false, nil, nil
+	})
+
+	if err := TaintNodeUnschedulable(context.Background(), cli, "node-a"); err != nil {
+		t.Fatalf("TaintNodeUnschedulable() error = %v", err)
+	}
+	if updateCalls < 2 {
+		t.Fatalf("updateCalls = %d, want retry after conflict", updateCalls)
+	}
+
+	node, err := cli.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get(node-a) error = %v", err)
+	}
+	if !node.Spec.Unschedulable {
+		t.Fatal("node.Spec.Unschedulable = false, want true")
 	}
 	if len(node.Spec.Taints) != 1 {
 		t.Fatalf("len(node.Spec.Taints) = %d, want 1", len(node.Spec.Taints))
