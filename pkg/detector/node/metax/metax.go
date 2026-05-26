@@ -58,23 +58,28 @@ func (d *detector) day2Check() {
 }
 
 func (d *detector) check() error {
+	klog.InfoS("Running MetaX GPU availability check")
 	err := gpuCheck(d.config.GPUNum)
 	if err != nil {
 		return err
 	}
 
+	klog.InfoS("Running MetaX temperature check")
 	err = temperatureCheck(d.config.Temperature)
 	if err != nil {
 		return err
 	}
+	klog.InfoS("Running MetaX NTP sync check")
 	err = ntpSyncCheck(d.config.NTPMaxOffsetMillis)
 	if err != nil {
 		return err
 	}
+	klog.InfoS("Running MetaX ECC fault page check")
 	err = eccFaultPageCheck(d.config.ECCMaxCount)
 	if err != nil {
 		return err
 	}
+	klog.InfoS("Running MetaX HCA state check")
 	return hcaStateCheck(d.config.HCAIDs)
 }
 

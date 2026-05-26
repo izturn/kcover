@@ -181,7 +181,7 @@ func (c *SlowNodeAggregator) AddReport(ns, workloadName, reportText string) (rea
 		return false, nil, nil
 	}
 
-	slowNodes = detectSlowNodes(wkl.nodeReports, wkl.expectedBatchCount)
+	slowNodes = detectSlowNodes(ns, workloadName, wkl.nodeReports, wkl.expectedBatchCount)
 
 	delete(c.workloads, key)
 	return true, slowNodes, nil
@@ -276,7 +276,7 @@ type pairKey struct {
 // Final result = union(fail-fast abnormal nodes, pairwise slow nodes).
 // This ensures fail-fast nodes are always reported, while they do not distort
 // the batch-intersection slow-node decision.
-func detectSlowNodes(nodeReports map[nodeName]nodeReport, expectedBatchCount int) []string {
+func detectSlowNodes(ns, workloadName string, nodeReports map[nodeName]nodeReport, expectedBatchCount int) []string {
 	// abnormalNodes 保存最终输出，既包括 fail-fast 直接判异常的节点，也包括
 	// 后续通过 batch 交集规则识别出的 pairwise slow node。
 	abnormalNodes := make(nodeNameSet, len(nodeReports))
@@ -288,14 +288,19 @@ func detectSlowNodes(nodeReports map[nodeName]nodeReport, expectedBatchCount int
 			// gpu/storage 已经失败的节点直接进入最终异常集合，不再参与 batch 交集计算。
 			hasFailFast = true
 			abnormalNodes[report.nodeName] = struct{}{}
+			klog.V(4).InfoS("preflight report marked fail-fast", "namespace", ns, "workload", workloadName, "node", report.nodeName, "nodeIP", report.selfIP)
 			continue
 		}
 		preflightReports[key] = report
 	}
 
 	failedNodeIPsByBatch := failedNodeIPsByBatch(preflightReports)
+	if len(failedNodeIPsByBatch) > 0 {
+		klog.V(4).InfoS("preflight failed nodes by batch", "namespace", ns, "workload", workloadName, "batches", formatFailedNodeIPsByBatch(failedNodeIPsByBatch))
+	}
 	if expectedBatchCount > 0 && len(failedNodeIPsByBatch) < expectedBatchCount && !hasFailFast {
 		// 没有 fail-fast 兜底时，缺少 batch 意味着 pairwise 证据不完整，此时不输出慢节点。
+		klog.V(4).InfoS("preflight evidence incomplete", "namespace", ns, "workload", workloadName, "failedBatchCount", len(failedNodeIPsByBatch), "expectedBatchCount", expectedBatchCount)
 		return nil
 	}
 	if len(failedNodeIPsByBatch) > 0 {
@@ -311,12 +316,14 @@ func detectSlowNodes(nodeReports map[nodeName]nodeReport, expectedBatchCount int
 
 		// 交集结果表示“在所有有效 batch 中都出现在失败集合里的节点”，把它们并入最终异常集合。
 		slowNodes := intersectFailedNodeIPs(failedNodeIPsByBatch, nodeIPToName)
+		klog.V(4).InfoS("preflight pairwise slow nodes", "namespace", ns, "workload", workloadName, "nodes", slowNodes)
 		for _, slowNodeName := range slowNodes {
 			abnormalNodes[nodeName(slowNodeName)] = struct{}{}
 		}
 	}
 
 	if len(abnormalNodes) == 0 {
+		klog.V(4).InfoS("preflight final slow nodes", "namespace", ns, "workload", workloadName, "nodes", []string{})
 		return nil
 	}
 
@@ -326,6 +333,7 @@ func detectSlowNodes(nodeReports map[nodeName]nodeReport, expectedBatchCount int
 		result = append(result, string(nodeName))
 	}
 	sort.Strings(result)
+	klog.V(4).InfoS("preflight final slow nodes", "namespace", ns, "workload", workloadName, "nodes", result)
 
 	return result
 }
@@ -418,6 +426,20 @@ func intersectFailedNodeIPs(failedNodeIPsByBatch map[batchIndex]nodeIPSet, nodeI
 	}
 
 	return result
+}
+
+func formatFailedNodeIPsByBatch(failedNodeIPsByBatch map[batchIndex]nodeIPSet) map[int][]string {
+	formatted := make(map[int][]string, len(failedNodeIPsByBatch))
+	for batchIdx, nodeIPs := range failedNodeIPsByBatch {
+		batchNodes := make([]string, 0, len(nodeIPs))
+		for ip := range nodeIPs {
+			batchNodes = append(batchNodes, string(ip))
+		}
+		sort.Strings(batchNodes)
+		formatted[int(batchIdx)] = batchNodes
+	}
+
+	return formatted
 }
 
 func extractNodeReport(txt string) (Report, workloadPlan, []batchResult, error) {
@@ -557,6 +579,10 @@ func extractBatchResult(item any, reporterIP string, batchCount int, busBWThresh
 func batchFailed(batchMap map[string]any, batchIdx int, busBWThresholdGBPS float64) (bool, error) {
 	if status, ok := batchMap["status"].(string); ok && strings.EqualFold(status, "fail") {
 		return true, nil
+	}
+	if status, ok := batchMap["status"].(string); ok && strings.EqualFold(status, "skip") {
+		klog.V(5).InfoS("preflight batch skipped", "batchIdx", batchIdx, "pair", batchMap["pair"], "reason", batchMap["reason"])
+		return false, nil
 	}
 
 	allreduceMS, errMS := floatField(batchMap["allreduce_ms"])

@@ -9,6 +9,39 @@ import (
 	"time"
 )
 
+func ExampleSlowNodeAggregator_AddReport_allSkipReportsProduceNoSlowNodes() {
+	aggregator := NewSlowNodeAggregator(0)
+	reports := []string{
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 1, "node_name": "c500-worker1", "node_ip": "10.107.204.141", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.141", "10.107.204.146"], "self_ip": "10.107.204.141", "status": "skip"}]}`,
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 2, "node_name": "c500-worker2", "node_ip": "10.107.204.142", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.142", "10.107.204.146"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}]}`,
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 3, "node_name": "c500-worker3", "node_ip": "10.107.204.143", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.143", "10.107.204.146"], "self_ip": "10.107.204.143", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}]}`,
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 0, "node_name": "c500-worker4", "node_ip": "10.107.204.146", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.143", "10.107.204.146"], "self_ip": "10.107.204.146", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.142", "10.107.204.146"], "self_ip": "10.107.204.146", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.141", "10.107.204.146"], "self_ip": "10.107.204.146", "status": "skip", "reason": "gid_index_mismatch"}]}`,
+	}
+
+	for _, report := range reports[:len(reports)-1] {
+		ready, slowNodes, err := aggregator.AddReport("default", "preflight8-node-0", report)
+		if err != nil {
+			fmt.Printf("error: %v\n", err)
+			return
+		}
+		fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+	}
+
+	ready, slowNodes, err := aggregator.AddReport("default", "preflight8-node-0", reports[len(reports)-1])
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+
+	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+
+	// Output:
+	// ready=false slowNodes=[]
+	// ready=false slowNodes=[]
+	// ready=false slowNodes=[]
+	// ready=true slowNodes=[]
+}
+
 func TestSlowNodeAggregator_FailFastA_OnlyAIsSlowNode(t *testing.T) {
 	t.Parallel()
 	aggregator := NewSlowNodeAggregator(0)
