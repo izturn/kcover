@@ -93,7 +93,7 @@ func ExampleSlowNodeAggregator_AddReport_skipReportsAreTreatedAsAbnormal() {
 	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
 
 	// Output:
-	// error: extract preflight report: batch_idx 2 out of range [0,2)
+	// error: extract preflight report: odd workload sizes are not supported: workload_size=3
 }
 
 func ExampleSlowNodeAggregator_AddReport_skipReportsWithEmptyGPUCheckReport() {
@@ -121,7 +121,7 @@ func ExampleSlowNodeAggregator_AddReport_skipReportsWithEmptyGPUCheckReport() {
 	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
 
 	// Output:
-	// error: extract preflight report: batch_idx 2 out of range [0,2)
+	// error: extract preflight report: odd workload sizes are not supported: workload_size=3
 }
 
 func TestSlowNodeAggregator_FailFastA_OnlyAIsSlowNode(t *testing.T) {
@@ -541,6 +541,23 @@ func TestSlowNodeAggregatorRequiresWorldSize(t *testing.T) {
 	}
 	if slowNodes != nil {
 		t.Fatalf("aggregator.AddReport(...) slowNodes = %v, want nil", slowNodes)
+	}
+}
+
+func TestExtractNodeReportRejectsOddWorkloadSize(t *testing.T) {
+	t.Parallel()
+
+	reports := []string{
+		`{"version":1,"workload":"job-odd","workload_size":3,"rank":0,"node_name":"node-a","node_ip":"10.0.0.1","gpu_check":1,"storage_check":1,"batches":[]}`,
+		`{"version":1,"workload":"job-odd","workload_size":3,"rank":1,"node_name":"node-b","node_ip":"10.0.0.2","gpu_check":1,"storage_check":1,"batches":[]}`,
+		`{"version":1,"workload":"job-odd","workload_size":3,"rank":2,"node_name":"node-c","node_ip":"10.0.0.3","gpu_check":1,"storage_check":1,"batches":[]}`,
+	}
+
+	for _, reportText := range reports {
+		_, _, _, err := extractNodeReport(reportText)
+		if err == nil || !strings.Contains(err.Error(), "odd workload sizes are not supported") {
+			t.Fatalf("extractNodeReport(...) error = %v, want odd node count error", err)
+		}
 	}
 }
 

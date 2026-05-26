@@ -766,6 +766,9 @@ func buildWorkloadPlan(workloadSize int) (workloadPlan, error) {
 	if workloadSize <= 0 {
 		return workloadPlan{}, fmt.Errorf("cannot resolve preflight layout without workload_size")
 	}
+	if workloadSize%2 != 0 {
+		return workloadPlan{}, fmt.Errorf("odd workload sizes are not supported: workload_size=%d", workloadSize)
+	}
 	plan.reportCount = workloadSize
 	plan.batchCount = workloadSize - 1
 	if plan.reportCount <= 1 {
