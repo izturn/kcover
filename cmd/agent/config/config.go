@@ -1,12 +1,15 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	DefaultPath                = "/etc/kcover-agent/config.yaml"
 	DefaultVendor              = 1
 	DefaultInterval            = 5
-	DefaultMetaXDay2CheckHour  = 10
+	DefaultMetaXDay2CheckTime  = "10:00"
 	DefaultMetaXGPUNum         = 8
 	DefaultMetaXTemperature    = 85
 	DefaultMetaXECCMaxCount    = 64
@@ -26,7 +29,7 @@ type MetaX struct {
 	Temperature        int      `yaml:"temperature"`
 	ECCMaxCount        int      `yaml:"eccMaxCount"`
 	NTPMaxOffsetMillis int32    `yaml:"ntpMaxOffsetMillis"`
-	Day2CheckHour      int      `yaml:"day2CheckHour"`
+	Day2CheckTime      string   `yaml:"day2CheckTime"`
 }
 
 func DefaultAgent() Agent {
@@ -38,17 +41,17 @@ func DefaultAgent() Agent {
 			Temperature:        DefaultMetaXTemperature,
 			ECCMaxCount:        DefaultMetaXECCMaxCount,
 			NTPMaxOffsetMillis: DefaultMetaXNTPMaxOffsetMS,
-			Day2CheckHour:      DefaultMetaXDay2CheckHour,
+			Day2CheckTime:      DefaultMetaXDay2CheckTime,
 		},
 	}
 }
 
 func (cfg Agent) String() string {
 	return fmt.Sprintf(
-		"vendor=%d intervalSeconds=%d metaX.day2CheckHour=%d metaX.gpuNum=%d metaX.temperature=%d metaX.eccMaxCount=%d metaX.ntpMaxOffsetMillis=%d metaX.hcaIDs=%v",
+		"vendor=%d intervalSeconds=%d metaX.day2CheckTime=%s metaX.gpuNum=%d metaX.temperature=%d metaX.eccMaxCount=%d metaX.ntpMaxOffsetMillis=%d metaX.hcaIDs=%v",
 		cfg.Vendor,
 		cfg.Interval,
-		cfg.MetaX.Day2CheckHour,
+		cfg.MetaX.Day2CheckTime,
 		cfg.MetaX.GPUNum,
 		cfg.MetaX.Temperature,
 		cfg.MetaX.ECCMaxCount,
@@ -64,8 +67,8 @@ func (cfg *Agent) ApplyDefaults() {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultInterval
 	}
-	if cfg.MetaX.Day2CheckHour < 0 || cfg.MetaX.Day2CheckHour > 23 {
-		cfg.MetaX.Day2CheckHour = DefaultMetaXDay2CheckHour
+	if !validMetaXDay2CheckTime(cfg.MetaX.Day2CheckTime) {
+		cfg.MetaX.Day2CheckTime = DefaultMetaXDay2CheckTime
 	}
 	if cfg.MetaX.NTPMaxOffsetMillis <= 0 {
 		cfg.MetaX.NTPMaxOffsetMillis = DefaultMetaXNTPMaxOffsetMS
@@ -79,4 +82,13 @@ func (cfg *Agent) ApplyDefaults() {
 	if cfg.MetaX.ECCMaxCount < 0 {
 		cfg.MetaX.ECCMaxCount = DefaultMetaXECCMaxCount
 	}
+}
+
+func validMetaXDay2CheckTime(value string) bool {
+	if value == "" {
+		return false
+	}
+
+	_, err := time.Parse("15:04", value)
+	return err == nil
 }

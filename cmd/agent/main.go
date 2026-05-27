@@ -59,7 +59,7 @@ func run() error {
 
 	sink := events.NewKubeEventSink(client)
 
-	detector, err := node.NewDetector(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, sink)
+	detector, err := node.NewDetector(hostName, node.Vendor(cfg.Vendor), cfg.Interval, cfg.MetaX, client, sink)
 	if err != nil {
 		return fmt.Errorf("create node detector: %w", err)
 	}

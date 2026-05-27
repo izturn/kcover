@@ -12,13 +12,17 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 )
 
 type kubeEventBridge struct {
 	*kubeEventSink
 	eventCh chan Event
-	stopCh  chan struct{}
+	queue   workqueue.TypedRateLimitingInterface[*Event]
+
+	stopCh chan struct{}
+	doneCh chan struct{}
 }
 
 const eventMaxAge = 3 * time.Minute
@@ -35,7 +39,14 @@ func NewKubeEventBridge(cli kubernetes.Interface) Bridge {
 	return &kubeEventBridge{
 		kubeEventSink: sink,
 		eventCh:       make(chan Event, bridgeEventBufferSize),
-		stopCh:        make(chan struct{}),
+		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[*Event](),
+			workqueue.TypedRateLimitingQueueConfig[*Event]{
+				Name: "kcover-kube-events",
+			},
+		),
+		stopCh: make(chan struct{}),
+		doneCh: make(chan struct{}),
 	}
 }
 
@@ -46,7 +57,8 @@ func (bridge *kubeEventBridge) Start() error {
 	_, err := informer.AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: bridge.shouldWatchEvent,
 		Handler: cache.ResourceEventHandlerFuncs{
-			AddFunc: bridge.handleK8sEventAdd,
+			AddFunc:    bridge.handleK8sEventAdd,
+			UpdateFunc: bridge.handleK8sEventUpdate,
 		},
 	})
 	if err != nil {
@@ -54,6 +66,7 @@ func (bridge *kubeEventBridge) Start() error {
 	}
 
 	go informer.Run(bridge.stopCh)
+	go bridge.runQueueForwarder()
 	klog.InfoS("kube event bridge started")
 	return nil
 }
@@ -93,19 +106,76 @@ func (bridge *kubeEventBridge) handleK8sEventAdd(obj any) {
 		return
 	}
 
+	bridge.forwardK8sEvent(event)
+}
+
+func (bridge *kubeEventBridge) handleK8sEventUpdate(oldObj, newObj any) {
+	oldEvent, oldOK := oldObj.(*corev1.Event)
+	newEvent, newOK := newObj.(*corev1.Event)
+	if !oldOK || !newOK {
+		return
+	}
+
+	if !hasNewEventOccurrence(oldEvent, newEvent) {
+		return
+	}
+
+	if bridge.isExpiredEvent(newEvent, time.Now()) {
+		return
+	}
+
+	bridge.forwardK8sEvent(newEvent)
+}
+
+func hasNewEventOccurrence(oldEvent, newEvent *corev1.Event) bool {
+	if newEvent.Count > oldEvent.Count {
+		return true
+	}
+
+	oldTimestamp := oldEvent.LastTimestamp
+	newTimestamp := newEvent.LastTimestamp
+	if oldTimestamp.IsZero() || newTimestamp.IsZero() {
+		return false
+	}
+
+	return newTimestamp.After(oldTimestamp.Time)
+
+}
+
+func (bridge *kubeEventBridge) forwardK8sEvent(event *corev1.Event) {
 	evt, ok := bridge.toInternalEvent(event)
 	if !ok {
 		return
 	}
 
-	klog.V(3).InfoS("forward internal event", "resourceType", evt.ResourceType, "namespace", evt.Namespace, "name", evt.Name, "eventType", evt.EventType)
+	klog.V(3).InfoS("forward internal event", "resourceType", evt.ResourceType, "namespace", evt.Namespace, "name", evt.Name, "reason", evt.Reason, "eventType", evt.EventType)
 	select {
 	case <-bridge.stopCh:
 		return
-	case bridge.eventCh <- evt:
-		return
 	default:
-		klog.Warningf("kube event bridge dropped internal event: resourceType=%s namespace=%s name=%s eventType=%d", evt.ResourceType, evt.Namespace, evt.Name, evt.EventType)
+	}
+
+	bridge.queue.Add(&evt)
+}
+
+func (bridge *kubeEventBridge) runQueueForwarder() {
+	defer close(bridge.doneCh)
+
+	for {
+		evt, shutdown := bridge.queue.Get()
+		if shutdown {
+			return
+		}
+		if evt == nil {
+			bridge.queue.Forget(evt)
+			bridge.queue.Done(evt)
+			klog.ErrorS(nil, "kube event bridge received nil queue item")
+			continue
+		}
+
+		bridge.eventCh <- *evt
+		bridge.queue.Forget(evt)
+		bridge.queue.Done(evt)
 	}
 }
 
@@ -162,6 +232,7 @@ func (bridge *kubeEventBridge) toInternalRecoveryEvent(event *corev1.Event) (Eve
 			ResourceType: Pod,
 			Namespace:    obj.Namespace,
 			Name:         obj.Name,
+			Reason:       event.Reason,
 			EventType:    Error,
 			Message:      event.Message,
 		}, true
@@ -175,6 +246,7 @@ func (bridge *kubeEventBridge) toInternalRecoveryEvent(event *corev1.Event) (Eve
 			ResourceType: Node,
 			Namespace:    event.Namespace,
 			Name:         obj.Name,
+			Reason:       event.Reason,
 			EventType:    Error,
 			Message:      event.Message,
 		}, true
@@ -199,6 +271,9 @@ func isPodObjectRef(ref corev1.ObjectReference) bool {
 
 func (bridge *kubeEventBridge) Stop() {
 	close(bridge.stopCh)
+	bridge.queue.ShutDownWithDrain()
+	<-bridge.doneCh
+	close(bridge.eventCh)
 }
 
 func (bridge *kubeEventBridge) EventChan() <-chan Event {

@@ -3,6 +3,7 @@ package metax
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"os/exec"
@@ -15,6 +16,9 @@ import (
 	d "github.com/baizeai/kcover/pkg/detector"
 	"github.com/baizeai/kcover/pkg/events"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 )
 
@@ -23,6 +27,8 @@ var gpuPrefix = []byte("GPU#")
 const expectedGPUStatus = "Available"
 const defaultExpectedHCAState = "PORT_ACTIVE"
 
+const metaXGPUResourceName corev1.ResourceName = "metax-tech.com/gpu"
+
 var _ d.Detector = (*detector)(nil)
 
 type detector struct {
@@ -30,19 +36,38 @@ type detector struct {
 	stopCh   chan struct{}
 	interval int
 	config   config.MetaX
+	client   kubernetes.Interface
+
+	capabilityCheck func() (bool, error)
+	checkFn         func() error
 }
 
-func NewDetector(cfg config.MetaX, interval int) *detector {
-	return &detector{
+func NewDetector(cfg config.MetaX, interval int, client kubernetes.Interface) *detector {
+	d := &detector{
 		stopCh:   make(chan struct{}),
 		eventCh:  make(chan events.Event),
 		interval: interval,
 		config:   cfg,
+		client:   client,
 	}
+	d.capabilityCheck = d.hasMetaXGPUCapacity
+	d.checkFn = d.check
+
+	return d
 }
 
 func (d *detector) day2Check() {
-	err := d.check()
+	enabled, err := d.capabilityCheck()
+	if err != nil {
+		klog.ErrorS(err, "MetaX day2 capability check failed", "node", d.config.NodeName, "resource", metaXGPUResourceName)
+		return
+	}
+	if !enabled {
+		klog.V(2).InfoS("Skip MetaX day2 check on node without positive MetaX GPU capacity", "node", d.config.NodeName, "resource", metaXGPUResourceName)
+		return
+	}
+
+	err = d.checkFn()
 	if err == nil {
 		return
 	}
@@ -55,6 +80,27 @@ func (d *detector) day2Check() {
 		EventType:    events.Error,
 		Message:      err.Error(),
 	}
+}
+
+func (d *detector) hasMetaXGPUCapacity() (bool, error) {
+	if d.client == nil {
+		return false, fmt.Errorf("kubernetes client is nil")
+	}
+	if d.config.NodeName == "" {
+		return false, fmt.Errorf("node name is empty")
+	}
+
+	node, err := d.client.CoreV1().Nodes().Get(context.Background(), d.config.NodeName, metav1.GetOptions{})
+	if err != nil {
+		return false, fmt.Errorf("get node %s: %w", d.config.NodeName, err)
+	}
+
+	quantity, ok := node.Status.Capacity[metaXGPUResourceName]
+	if !ok {
+		return false, nil
+	}
+
+	return quantity.Sign() > 0, nil
 }
 
 func (d *detector) check() error {
@@ -83,30 +129,46 @@ func (d *detector) check() error {
 	return hcaStateCheck(d.config.HCAIDs)
 }
 
-func nextCheckTime(now time.Time, hour int) time.Time {
-	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
+func nextCheckTime(now time.Time, schedule string) (time.Time, error) {
+	parsed, err := time.Parse("15:04", schedule)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse MetaX day2 check time %q: %w", schedule, err)
+	}
+
+	hour, minute, _ := parsed.Clock()
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
 	if !next.After(now) {
 		next = next.Add(24 * time.Hour)
 	}
 
-	return next
+	return next, nil
 }
 
 func (d *detector) Start() error {
+	next, err := nextCheckTime(time.Now(), d.config.Day2CheckTime)
+	if err != nil {
+		return err
+	}
+
 	go func() {
 		ticker := time.NewTicker(time.Second * time.Duration(d.interval))
 		defer ticker.Stop()
 
-		timer := time.NewTimer(time.Until(nextCheckTime(time.Now(), d.config.Day2CheckHour)))
+		timer := time.NewTimer(time.Until(next))
 		defer timer.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				time.Sleep(1) // placeholder
+				continue
 
 			case <-timer.C:
 				d.day2Check()
-				timer.Reset(time.Until(nextCheckTime(time.Now(), d.config.Day2CheckHour)))
+				next, err := nextCheckTime(time.Now(), d.config.Day2CheckTime)
+				if err != nil {
+					klog.ErrorS(err, "MetaX day2 schedule became invalid", "schedule", d.config.Day2CheckTime)
+					return
+				}
+				timer.Reset(time.Until(next))
 
 			case <-d.stopCh:
 				return

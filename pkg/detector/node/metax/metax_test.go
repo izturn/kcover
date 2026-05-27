@@ -8,17 +8,26 @@ import (
 	"time"
 
 	kcoverconfig "github.com/baizeai/kcover/cmd/agent/config"
+	"github.com/baizeai/kcover/pkg/events"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
-const defaultCheckHour = 10
+const defaultCheckTime = "10:15"
 
 func TestNextCheckTimeSameDay(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 22, 9, 30, 0, 0, time.FixedZone("UTC+8", 8*3600))
-	next := nextCheckTime(now, defaultCheckHour)
+	next, err := nextCheckTime(now, defaultCheckTime)
+	if err != nil {
+		t.Fatalf("nextCheckTime() error = %v", err)
+	}
 
-	want := time.Date(2026, 4, 22, 10, 0, 0, 0, now.Location())
+	want := time.Date(2026, 4, 22, 10, 15, 0, 0, now.Location())
 	if !next.Equal(want) {
 		t.Fatalf("nextCheckTime() = %v, want %v", next, want)
 	}
@@ -27,26 +36,41 @@ func TestNextCheckTimeSameDay(t *testing.T) {
 func TestNextCheckTimeNextDay(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 4, 22, 10, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
-	next := nextCheckTime(now, defaultCheckHour)
+	now := time.Date(2026, 4, 22, 10, 15, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	next, err := nextCheckTime(now, defaultCheckTime)
+	if err != nil {
+		t.Fatalf("nextCheckTime() error = %v", err)
+	}
 
-	want := time.Date(2026, 4, 23, 10, 0, 0, 0, now.Location())
+	want := time.Date(2026, 4, 23, 10, 15, 0, 0, now.Location())
 	if !next.Equal(want) {
 		t.Fatalf("nextCheckTime() = %v, want %v", next, want)
 	}
 }
 
-func TestNextCheckTimeAfterScheduledHour(t *testing.T) {
+func TestNextCheckTimeAfterScheduledMinute(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 4, 22, 10, 5, 0, 0, time.FixedZone("UTC+8", 8*3600))
-	next := nextCheckTime(now, defaultCheckHour)
+	now := time.Date(2026, 4, 22, 10, 16, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	next, err := nextCheckTime(now, defaultCheckTime)
+	if err != nil {
+		t.Fatalf("nextCheckTime() error = %v", err)
+	}
 
-	want := time.Date(2026, 4, 23, 10, 0, 0, 0, now.Location())
+	want := time.Date(2026, 4, 23, 10, 15, 0, 0, now.Location())
 	if !next.Equal(want) {
 		t.Fatalf("nextCheckTime() = %v, want %v", next, want)
 	}
 
+}
+
+func TestNextCheckTimeRejectsInvalidSchedule(t *testing.T) {
+	t.Parallel()
+
+	_, err := nextCheckTime(time.Now(), "25:61")
+	if err == nil {
+		t.Fatal("nextCheckTime() error = nil, want non-nil for invalid schedule")
+	}
 }
 
 func TestNewDetectorKeepsIntervalAndHour(t *testing.T) {
@@ -59,8 +83,8 @@ func TestNewDetectorKeepsIntervalAndHour(t *testing.T) {
 		Temperature:        85,
 		ECCMaxCount:        64,
 		NTPMaxOffsetMillis: 10,
-		Day2CheckHour:      defaultCheckHour,
-	}, 5)
+		Day2CheckTime:      defaultCheckTime,
+	}, 5, fake.NewSimpleClientset())
 	if instance.config.NodeName != "node-a" {
 		t.Fatalf("instance.config.NodeName = %q, want %q", instance.config.NodeName, "node-a")
 	}
@@ -82,9 +106,115 @@ func TestNewDetectorKeepsIntervalAndHour(t *testing.T) {
 	if instance.config.NTPMaxOffsetMillis != 10 {
 		t.Fatalf("instance.config.NTPMaxOffsetMillis = %v, want 10", instance.config.NTPMaxOffsetMillis)
 	}
-	if instance.config.Day2CheckHour != defaultCheckHour {
-		t.Fatalf("instance.config.Day2CheckHour = %d, want %d", instance.config.Day2CheckHour, defaultCheckHour)
+	if instance.config.Day2CheckTime != defaultCheckTime {
+		t.Fatalf("instance.config.Day2CheckTime = %q, want %q", instance.config.Day2CheckTime, defaultCheckTime)
 	}
+}
+
+func TestNodeHasPositiveMetaXGPUCapacity(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{Capacity: corev1.ResourceList{
+			metaXGPUResourceName: resource.MustParse("8"),
+		}},
+	}))
+
+	enabled, err := instance.hasMetaXGPUCapacity()
+	if err != nil {
+		t.Fatalf("nodeHasPositiveMetaXGPUCapacity(...) error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("nodeHasPositiveMetaXGPUCapacity(...) = false, want true")
+	}
+}
+
+func TestNodeHasPositiveMetaXGPUCapacityReturnsFalseWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}))
+
+	enabled, err := instance.hasMetaXGPUCapacity()
+	if err != nil {
+		t.Fatalf("nodeHasPositiveMetaXGPUCapacity(...) error = %v", err)
+	}
+	if enabled {
+		t.Fatal("nodeHasPositiveMetaXGPUCapacity(...) = true, want false")
+	}
+}
+
+func TestNodeHasPositiveMetaXGPUCapacityReturnsFalseWhenZero(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{Capacity: corev1.ResourceList{
+			metaXGPUResourceName: resource.MustParse("0"),
+		}},
+	}))
+
+	enabled, err := instance.hasMetaXGPUCapacity()
+	if err != nil {
+		t.Fatalf("nodeHasPositiveMetaXGPUCapacity(...) error = %v", err)
+	}
+	if enabled {
+		t.Fatal("nodeHasPositiveMetaXGPUCapacity(...) = true, want false")
+	}
+}
+
+func TestDay2CheckSkipsNodeWithoutMetaXGPUCapacity(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset())
+	checkCalled := false
+	instance.capabilityCheck = func() (bool, error) { return false, nil }
+	instance.checkFn = func() error {
+		checkCalled = true
+		return fmt.Errorf("unexpected day2 check")
+	}
+
+	instance.day2Check()
+
+	if checkCalled {
+		t.Fatal("day2Check() invoked checkFn on node without MetaX GPU capacity")
+	}
+	select {
+	case event := <-instance.EventChan():
+		t.Fatalf("day2Check() emitted event = %+v, want none", event)
+	default:
+	}
+	instance.Stop()
+}
+
+func TestDay2CheckEmitsEventWhenCapabilityEnabledAndCheckFails(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset())
+	instance.capabilityCheck = func() (bool, error) { return true, nil }
+	instance.checkFn = func() error { return fmt.Errorf("boom") }
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		instance.day2Check()
+	}()
+
+	select {
+	case event := <-instance.EventChan():
+		if event.ResourceType != events.Node || event.Name != "node-a" || event.Message != "boom" {
+			t.Fatalf("day2Check() event = %+v, want node error event for node-a", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("day2Check() emitted no event, want one")
+	}
+
+	select {
+	case <-done:
+	default:
+		t.Fatal("day2Check() did not return after emitting event")
+	}
+	instance.Stop()
 }
 
 func TestParseHotspotTemperatures(t *testing.T) {
