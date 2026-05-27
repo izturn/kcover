@@ -1,4 +1,4 @@
-ARG MX_SMI_IMAGE=release-ci.daocloud.io/baize/mx-smi:v0.1
+ARG MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.1
 
 FROM --platform=$BUILDPLATFORM m.daocloud.io/docker.io/golang:1.23.2 AS builder
 
