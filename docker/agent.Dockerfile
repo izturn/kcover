@@ -1,4 +1,4 @@
-ARG MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.1
+ARG MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.2
 
 FROM --platform=$BUILDPLATFORM m.daocloud.io/docker.io/golang:1.23.2 AS builder
 
@@ -30,13 +30,20 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends chrony \
+	&& apt-get install -y --no-install-recommends \
+		chrony \
+		ibverbs-providers \
+		libibverbs1 \
+		libnl-3-200 \
+		libnl-route-3-200 \
+		tzdata \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/kcover-agent kcover-agent
 COPY --from=metax-tools /usr/local/bin/mx-smi /usr/local/bin/mx-smi
+COPY --from=metax-tools /usr/local/bin/ibv_devinfo /usr/local/bin/ibv_devinfo
 COPY docker/agent-entrypoint.sh /usr/local/bin/agent-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/mx-smi /usr/local/bin/agent-entrypoint.sh
+RUN chmod +x /usr/local/bin/mx-smi /usr/local/bin/ibv_devinfo /usr/local/bin/agent-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/agent-entrypoint.sh"]

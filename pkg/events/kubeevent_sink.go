@@ -46,7 +46,10 @@ func newEventRecorder(cli kubernetes.Interface) record.EventRecorder {
 }
 
 func (sink *kubeEventSink) recordToPod(e Event) error {
-	pod, err := sink.client.CoreV1().Pods(e.Namespace).Get(context.Background(), e.Name, metav1.GetOptions{})
+	ctx, cancel := kube.WithRequestTimeout(context.Background())
+	defer cancel()
+
+	pod, err := sink.client.CoreV1().Pods(e.Namespace).Get(ctx, e.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -55,7 +58,10 @@ func (sink *kubeEventSink) recordToPod(e Event) error {
 }
 
 func (sink *kubeEventSink) recordToNode(e Event) error {
-	node, err := sink.client.CoreV1().Nodes().Get(context.Background(), e.Name, metav1.GetOptions{})
+	ctx, cancel := kube.WithRequestTimeout(context.Background())
+	defer cancel()
+
+	node, err := sink.client.CoreV1().Nodes().Get(ctx, e.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -110,7 +116,10 @@ func (sink *kubeEventSink) recordPreflightEvent(ref *corev1.ObjectReference, eve
 		Type:           corev1.EventTypeNormal,
 		Source:         corev1.EventSource{Component: "kcover"},
 	}
-	_, err := sink.client.CoreV1().Events(kube.CurrentNamespace()).Create(context.Background(), evt, metav1.CreateOptions{})
+	ctx, cancel := kube.WithRequestTimeout(context.Background())
+	defer cancel()
+
+	_, err := sink.client.CoreV1().Events(kube.CurrentNamespace()).Create(ctx, evt, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create preflight event for %s: %w", ref.Name, err)
 	}

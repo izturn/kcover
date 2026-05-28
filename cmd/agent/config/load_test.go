@@ -36,8 +36,8 @@ func TestLoadFileAppliesDefaultsAndOverrides(t *testing.T) {
 	if cfg.MetaX.HCAIDs != nil {
 		t.Fatalf("cfg.MetaX.HCAIDs = %v, want nil", cfg.MetaX.HCAIDs)
 	}
-	if cfg.MetaX.Day2CheckHour != DefaultMetaXDay2CheckHour {
-		t.Fatalf("cfg.MetaX.Day2CheckHour = %d, want %d", cfg.MetaX.Day2CheckHour, DefaultMetaXDay2CheckHour)
+	if cfg.MetaX.Day2CheckTime != DefaultMetaXDay2CheckTime {
+		t.Fatalf("cfg.MetaX.Day2CheckTime = %q, want %q", cfg.MetaX.Day2CheckTime, DefaultMetaXDay2CheckTime)
 	}
 	if cfg.MetaX.ECCMaxCount != DefaultMetaXECCMaxCount {
 		t.Fatalf("cfg.MetaX.ECCMaxCount = %d, want %d", cfg.MetaX.ECCMaxCount, DefaultMetaXECCMaxCount)
@@ -98,7 +98,7 @@ func TestApplyDefaultsRepairsInvalidValues(t *testing.T) {
 			Temperature:        0,
 			ECCMaxCount:        -1,
 			NTPMaxOffsetMillis: 0,
-			Day2CheckHour:      24,
+			Day2CheckTime:      "24:00",
 		},
 	}
 
@@ -122,7 +122,7 @@ func TestApplyDefaultsRepairsInvalidValues(t *testing.T) {
 	if cfg.MetaX.NTPMaxOffsetMillis != DefaultMetaXNTPMaxOffsetMS {
 		t.Fatalf("cfg.MetaX.NTPMaxOffsetMillis = %v, want %v", cfg.MetaX.NTPMaxOffsetMillis, DefaultMetaXNTPMaxOffsetMS)
 	}
-	if cfg.MetaX.Day2CheckHour != DefaultMetaXDay2CheckHour {
-		t.Fatalf("cfg.MetaX.Day2CheckHour = %d, want %d", cfg.MetaX.Day2CheckHour, DefaultMetaXDay2CheckHour)
+	if cfg.MetaX.Day2CheckTime != DefaultMetaXDay2CheckTime {
+		t.Fatalf("cfg.MetaX.Day2CheckTime = %q, want %q", cfg.MetaX.Day2CheckTime, DefaultMetaXDay2CheckTime)
 	}
 }

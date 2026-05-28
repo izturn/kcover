@@ -71,7 +71,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           provenance: false
           tags: ${{ steps.agent_meta.outputs.tags }}
@@ -80,7 +80,7 @@ jobs:
           cache-to: type=gha,mode=max
           file: docker/agent.Dockerfile
           build-args: |
-            MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.1
+            MX_SMI_IMAGE=ghcr.io/baizeai/mx-smi:v0.2
 
   publish-chart:
     if: startsWith(github.ref, 'refs/tags/v')

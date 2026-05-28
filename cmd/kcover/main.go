@@ -112,9 +112,9 @@ func makeElectionCallback(reportCollectionTimeout, sweepInterval time.Duration) 
 			klog.InfoS("kcover started")
 		},
 		func() {
-			recov.Stop()
 			detector.Stop()
 			bridge.Stop()
+			recov.Stop()
 			klog.InfoS("kcover stopped")
 		}
 }

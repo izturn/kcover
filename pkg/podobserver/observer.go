@@ -1,6 +1,7 @@
 package podobserver
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/baizeai/kcover/pkg/events"
@@ -24,7 +25,8 @@ type observer struct {
 	client   kubernetes.Interface
 	sink     events.Sink
 	rules    []PodRule
-	stopCh   chan struct{}
+	cancel   context.CancelFunc
+	doneCh   chan struct{}
 	logName  string
 	nodeName string
 }
@@ -40,7 +42,6 @@ func New(cli kubernetes.Interface, sink events.Sink, logName string, rules ...Po
 		client:  cli,
 		sink:    sink,
 		rules:   rules,
-		stopCh:  make(chan struct{}),
 		logName: logName,
 	}, nil
 }
@@ -65,6 +66,10 @@ func NewForNode(cli kubernetes.Interface, sink events.Sink, logName, nodeName st
 }
 
 func (o *observer) Start() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	o.cancel = cancel
+	o.doneCh = make(chan struct{})
+
 	factory := informers.NewSharedInformerFactory(o.client, 0)
 	if o.nodeName != "" {
 		factory = informers.NewSharedInformerFactoryWithOptions(
@@ -104,7 +109,10 @@ func (o *observer) Start() error {
 		return err
 	}
 
-	go informer.Run(o.stopCh)
+	go func() {
+		defer close(o.doneCh)
+		informer.Run(ctx.Done())
+	}()
 
 	if o.nodeName == "" {
 		klog.InfoS("pod observer started", "observer", o.logName)
@@ -116,7 +124,12 @@ func (o *observer) Start() error {
 }
 
 func (o *observer) Stop() {
-	close(o.stopCh)
+	if o.cancel != nil {
+		o.cancel()
+	}
+	if o.doneCh != nil {
+		<-o.doneCh
+	}
 }
 
 func (o *observer) onAdd(pod *corev1.Pod) {

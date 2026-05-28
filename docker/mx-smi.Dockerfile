@@ -2,6 +2,15 @@ FROM cr.metax-tech.com/public-library/maca-pytorch:3.3.0.4-torch2.6-py310-ubuntu
 
 FROM m.daocloud.io/docker.io/ubuntu:24.04
 
-COPY --from=metax-tools /opt/mxdriver/bin/mx-smi /usr/local/bin/mx-smi
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		ibverbs-providers \
+		libibverbs1 \
+		libnl-3-200 \
+		libnl-route-3-200 \
+	&& rm -rf /var/lib/apt/lists/*
 
-RUN chmod +x /usr/local/bin/mx-smi
+COPY --from=metax-tools /opt/mxdriver/bin/mx-smi /usr/local/bin/mx-smi
+COPY --from=metax-tools /usr/bin/ibv_devinfo /usr/local/bin/ibv_devinfo
+
+RUN chmod +x /usr/local/bin/mx-smi /usr/local/bin/ibv_devinfo

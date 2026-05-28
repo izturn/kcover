@@ -9,6 +9,121 @@ import (
 	"time"
 )
 
+func ExampleSlowNodeAggregator_AddReport_allSkipReportsProduceAllSlowNodes() {
+	aggregator := NewSlowNodeAggregator(0)
+	reports := []string{
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 1, "node_name": "c500-worker1", "node_ip": "10.107.204.141", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.141", "10.107.204.146"], "self_ip": "10.107.204.141", "status": "skip"}]}`,
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 2, "node_name": "c500-worker2", "node_ip": "10.107.204.142", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.142", "10.107.204.146"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}]}`,
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 3, "node_name": "c500-worker3", "node_ip": "10.107.204.143", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.143", "10.107.204.146"], "self_ip": "10.107.204.143", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}]}`,
+		`{"version": 1, "workload": "preflight8-node-0", "workload_size": 4, "rank": 0, "node_name": "c500-worker4", "node_ip": "10.107.204.146", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.143", "10.107.204.146"], "self_ip": "10.107.204.146", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.142", "10.107.204.146"], "self_ip": "10.107.204.146", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.141", "10.107.204.146"], "self_ip": "10.107.204.146", "status": "skip", "reason": "gid_index_mismatch"}]}`,
+	}
+
+	for _, report := range reports[:len(reports)-1] {
+		ready, slowNodes, err := aggregator.AddReport("default", "preflight8-node-0", report)
+		if err != nil {
+			fmt.Printf("error: %v\n", err)
+			return
+		}
+		fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+	}
+
+	ready, slowNodes, err := aggregator.AddReport("default", "preflight8-node-0", reports[len(reports)-1])
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+
+	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+
+	// Output:
+	// ready=false slowNodes=[]
+	// ready=false slowNodes=[]
+	// ready=false slowNodes=[]
+	// ready=true slowNodes=[c500-worker1 c500-worker2 c500-worker3 c500-worker4]
+}
+
+func ExampleSlowNodeAggregator_AddReport_twoWorkersAllOkProduceNoSlowNodes() {
+	aggregator := NewSlowNodeAggregator(0)
+	reports := []string{
+		`{"version": 1, "workload": "preflight9-2workers-rerun2-node-0", "workload_size": 2, "rank": 0, "node_name": "c500-worker1", "node_ip": "10.107.204.141", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "phase": "pairwise", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.141", "local_rank": 0, "device": "MetaX C500", "status": "ok", "allreduce_ms": 211.52, "world_size": 16, "allreduce_shape": 536870912, "dtype_bytes": 4, "ranks_recorded": 8}]}`,
+		`{"version": 1, "workload": "preflight9-2workers-rerun2-node-0", "workload_size": 2, "rank": 1, "node_name": "c500-worker3", "node_ip": "10.107.204.143", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "phase": "pairwise", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.143", "local_rank": 0, "device": "MetaX C500", "status": "ok", "allreduce_ms": 210.512, "world_size": 16, "allreduce_shape": 536870912, "dtype_bytes": 4, "ranks_recorded": 8}]}`,
+	}
+
+	ready, slowNodes, err := aggregator.AddReport("default", "preflight9-2workers-rerun2-node-0", reports[0])
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+
+	ready, slowNodes, err = aggregator.AddReport("default", "preflight9-2workers-rerun2-node-0", reports[1])
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+
+	// Output:
+	// ready=false slowNodes=[]
+	// ready=true slowNodes=[]
+}
+
+func ExampleSlowNodeAggregator_AddReport_skipReportsAreTreatedAsAbnormal() {
+	aggregator := NewSlowNodeAggregator(0)
+	reports := []string{
+		`{"version": 1, "workload": "preflight9-2workers-fail4-node-0", "workload_size": 3, "rank": 2, "node_name": "c500-worker1", "node_ip": "10.107.204.141", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": [], "self_ip": "10.107.204.141", "status": "skip", "reason": "idle_roll_over"}]}`,
+		`{"version": 1, "workload": "preflight9-2workers-fail4-node-0", "workload_size": 3, "rank": 1, "node_name": "c500-worker2", "node_ip": "10.107.204.142", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": [], "self_ip": "10.107.204.142", "status": "skip", "reason": "idle_roll_over"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}]}`,
+		`{"version": 1, "workload": "preflight9-2workers-fail4-node-0", "workload_size": 3, "rank": 0, "node_name": "c500-worker3", "node_ip": "10.107.204.143", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": [], "self_ip": "10.107.204.143", "status": "skip", "reason": "idle_roll_over"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}]}`,
+	}
+
+	for _, report := range reports[:len(reports)-1] {
+		ready, slowNodes, err := aggregator.AddReport("default", "preflight9-2workers-fail4-node-0", report)
+		if err != nil {
+			fmt.Printf("error: %v\n", err)
+			return
+		}
+		fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+	}
+
+	ready, slowNodes, err := aggregator.AddReport("default", "preflight9-2workers-fail4-node-0", reports[len(reports)-1])
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+
+	// Output:
+	// error: extract preflight report: odd workload sizes are not supported: workload_size=3
+}
+
+func ExampleSlowNodeAggregator_AddReport_skipReportsWithEmptyGPUCheckReport() {
+	aggregator := NewSlowNodeAggregator(0)
+	reports := []string{
+		`{"version": 1, "workload": "preflight9-2workers-fail11-node-0", "workload_size": 3, "rank": 0, "node_name": "c500-worker1", "node_ip": "10.107.204.141", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.146"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": [], "self_ip": "10.107.204.141", "status": "skip", "reason": "idle_roll_over"}]}`,
+		`{"version": 1, "workload": "preflight9-2workers-fail11-node-0", "workload_size": 3, "rank": 1, "node_name": "c500-worker2", "node_ip": "10.107.204.142", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": [], "self_ip": "10.107.204.142", "status": "skip", "reason": "idle_roll_over"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.146"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}]}`,
+		`{"version": 1, "workload": "preflight9-2workers-fail11-node-0", "workload_size": 3, "rank": 2, "node_name": "c500-worker4", "node_ip": "10.107.204.146", "storage_check": 1, "gpu_check": 0, "node_check_busbw_threshold_gbps": "5", "batches": []}`,
+	}
+
+	for _, report := range reports[:len(reports)-1] {
+		ready, slowNodes, err := aggregator.AddReport("default", "preflight9-2workers-fail11-node-0", report)
+		if err != nil {
+			fmt.Printf("error: %v\n", err)
+			return
+		}
+		fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+	}
+
+	ready, slowNodes, err := aggregator.AddReport("default", "preflight9-2workers-fail11-node-0", reports[len(reports)-1])
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+	fmt.Printf("ready=%v slowNodes=%v\n", ready, slowNodes)
+
+	// Output:
+	// error: extract preflight report: odd workload sizes are not supported: workload_size=3
+}
+
 func TestSlowNodeAggregator_FailFastA_OnlyAIsSlowNode(t *testing.T) {
 	t.Parallel()
 	aggregator := NewSlowNodeAggregator(0)
@@ -429,6 +544,23 @@ func TestSlowNodeAggregatorRequiresWorldSize(t *testing.T) {
 	}
 }
 
+func TestExtractNodeReportRejectsOddWorkloadSize(t *testing.T) {
+	t.Parallel()
+
+	reports := []string{
+		`{"version":1,"workload":"job-odd","workload_size":3,"rank":0,"node_name":"node-a","node_ip":"10.0.0.1","gpu_check":1,"storage_check":1,"batches":[]}`,
+		`{"version":1,"workload":"job-odd","workload_size":3,"rank":1,"node_name":"node-b","node_ip":"10.0.0.2","gpu_check":1,"storage_check":1,"batches":[]}`,
+		`{"version":1,"workload":"job-odd","workload_size":3,"rank":2,"node_name":"node-c","node_ip":"10.0.0.3","gpu_check":1,"storage_check":1,"batches":[]}`,
+	}
+
+	for _, reportText := range reports {
+		_, _, _, err := extractNodeReport(reportText)
+		if err == nil || !strings.Contains(err.Error(), "odd workload sizes are not supported") {
+			t.Fatalf("extractNodeReport(...) error = %v, want odd node count error", err)
+		}
+	}
+}
+
 func TestExtractNodeReportSupportsSuccessfulReportWithSelfIP(t *testing.T) {
 	t.Parallel()
 
@@ -632,6 +764,56 @@ func TestExtractNodeReportUsesReportBusBWThreshold(t *testing.T) {
 	}
 	if batchResults[0].Failed {
 		t.Fatal("batchResults[0].Failed = true, want false when report threshold is lower than measured bus bw")
+	}
+}
+
+func TestBuildWorkloadPlanCapsBatchCountAtMaxLogicalBatchCount(t *testing.T) {
+	t.Parallel()
+
+	plan, err := buildWorkloadPlan(8)
+	if err != nil {
+		t.Fatalf("buildWorkloadPlan(...) error = %v", err)
+	}
+	if plan.reportCount != 8 || plan.batchCount != maxBatchCount {
+		t.Fatalf("plan = %+v, want reports=8 batches=%d", plan, maxBatchCount)
+	}
+}
+
+func TestExtractNodeReportIgnoresBatchIndexesBeyondMaxBatchCount(t *testing.T) {
+	t.Parallel()
+
+	reportText := `{
+	  "version": 1,
+	  "workload": "pre-8-node-0",
+	  "workload_size": 8,
+	  "rank": 0,
+	  "node_name": "node-a",
+	  "node_ip": "10.0.0.1",
+	  "gpu_check": 1,
+	  "storage_check": 1,
+	  "batches": [
+	    {"batch_idx": 0, "pair": ["10.0.0.1", "10.0.0.2"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 1, "pair": ["10.0.0.1", "10.0.0.3"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 2, "pair": ["10.0.0.1", "10.0.0.4"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 3, "pair": ["10.0.0.1", "10.0.0.5"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 4, "pair": ["10.0.0.1", "10.0.0.6"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 5, "pair": ["10.0.0.1", "10.0.0.7"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 6, "pair": ["10.0.0.1", "10.0.0.8"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4}
+	  ]
+	}`
+
+	_, plan, batchResults, err := extractNodeReport(reportText)
+	if err != nil {
+		t.Fatalf("extractNodeReport(...) error = %v", err)
+	}
+	if plan.batchCount != maxBatchCount {
+		t.Fatalf("plan.batchCount = %d, want %d", plan.batchCount, maxBatchCount)
+	}
+	if len(batchResults) != maxBatchCount {
+		t.Fatalf("len(batchResults) = %d, want %d", len(batchResults), maxBatchCount)
+	}
+	if batchResults[len(batchResults)-1].BatchIdx != batchIndex(maxBatchCount-1) {
+		t.Fatalf("last batch index = %d, want %d", batchResults[len(batchResults)-1].BatchIdx, maxBatchCount-1)
 	}
 }
 
@@ -897,7 +1079,7 @@ func roundRobinReportsWithoutWorldSize(nodeCount int, failingNodes map[string]st
 
 func roundRobinPairs(nodeNames []string) [][][2]string {
 	working := append([]string(nil), nodeNames...)
-	batchCount := min(len(working)-1, maxBatch)
+	batchCount := len(working) - 1
 	batches := make([][][2]string, 0, batchCount)
 
 	for batchIdx := 0; batchIdx < batchCount; batchIdx++ {

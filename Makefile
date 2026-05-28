@@ -6,14 +6,14 @@ HUB ?= release-ci.daocloud.io/baize
 VERSION ?= dev-$(shell git rev-parse --short=8 HEAD)
 
 BUILD_PLATFORM ?= linux/amd64
-PUSH_PLATFORMS ?= linux/amd64,linux/arm64
-MX_SMI_IMAGE ?= ghcr.io/baizeai/mx-smi:v0.1
+CONTROLLER_PUSH_PLATFORMS ?= linux/amd64,linux/arm64
+AGENT_PUSH_PLATFORMS ?= linux/amd64
+MX_SMI_IMAGE ?= ghcr.io/baizeai/mx-smi:v0.2
 
 build-controller:
-	$(CONTAINER_CLI) buildx build \
+	$(CONTAINER_CLI) build \
 		-t $(HUB)/kcover-controller:$(VERSION) \
 		-f docker/kcover.Dockerfile \
-		--load \
 		--platform $(BUILD_PLATFORM) \
 		.
 
@@ -22,7 +22,7 @@ push-controller:
 		-t $(HUB)/kcover-controller:$(VERSION) \
 		-f docker/kcover.Dockerfile \
 		--push \
-		--platform $(PUSH_PLATFORMS) \
+		--platform $(CONTROLLER_PUSH_PLATFORMS) \
 		.
 
 build-mx-smi:
@@ -38,11 +38,10 @@ push-mx-smi: build-mx-smi
 image-mx-smi: push-mx-smi
 
 build-agent:
-	$(CONTAINER_CLI) buildx build \
+	$(CONTAINER_CLI) build \
 		-t $(HUB)/kcover-agent:$(VERSION) \
 		-f docker/agent.Dockerfile \
 		--build-arg MX_SMI_IMAGE=$(MX_SMI_IMAGE) \
-		--load \
 		--platform $(BUILD_PLATFORM) \
 		.
 
@@ -52,7 +51,7 @@ push-agent:
 		-f docker/agent.Dockerfile \
 		--build-arg MX_SMI_IMAGE=$(MX_SMI_IMAGE) \
 		--push \
-		--platform $(PUSH_PLATFORMS) \
+		--platform $(AGENT_PUSH_PLATFORMS) \
 		.
 
 build: build-controller build-agent

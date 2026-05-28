@@ -10,6 +10,7 @@ import (
 	"github.com/baizeai/kcover/pkg/events"
 	"github.com/baizeai/kcover/pkg/runner"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 )
 
@@ -28,7 +29,7 @@ type detector struct {
 	detectors []detectorpkg.Detector
 }
 
-func NewDetector(nodeName string, vendor Vendor, interval int, cfg config.MetaX, sink events.Sink) (runner.Runner, error) {
+func NewDetector(nodeName string, vendor Vendor, interval int, cfg config.MetaX, client kubernetes.Interface, sink events.Sink) (runner.Runner, error) {
 	if sink == nil {
 		return nil, fmt.Errorf("event sink cannot be nil")
 	}
@@ -36,8 +37,11 @@ func NewDetector(nodeName string, vendor Vendor, interval int, cfg config.MetaX,
 	var d detectorpkg.Detector
 	switch vendor {
 	case MetaX:
+		if client == nil {
+			return nil, fmt.Errorf("kubernetes client cannot be nil for MetaX detector")
+		}
 		cfg.NodeName = nodeName
-		d = metax.NewDetector(cfg, interval)
+		d = metax.NewDetector(cfg, interval, client)
 	case Nvidia:
 		d = nvidia.NewDetector(nodeName, interval)
 	default:

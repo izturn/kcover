@@ -25,8 +25,8 @@ func TestPreflightEventMarksSlowNodesAtDefaultThreshold(t *testing.T) {
 	)
 
 	controller := NewController(client, nil, 0, 0)
-	controller.onEvent(preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
-	controller.onEvent(preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
 
 	assertNodeUnschedulable(t, client, "node-a", true)
 	assertNodeUnschedulable(t, client, "node-b", true)
@@ -41,8 +41,8 @@ func TestPreflightEventUsesDefaultThresholdWithoutOverride(t *testing.T) {
 	)
 
 	controller := NewController(client, nil, 0, 0)
-	controller.onEvent(preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
-	controller.onEvent(preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
 
 	assertNodeUnschedulable(t, client, "node-a", true)
 	assertNodeUnschedulable(t, client, "node-b", true)
@@ -57,7 +57,7 @@ func TestSweepExpiredPreflightReportsDropsIncompleteWorkload(t *testing.T) {
 	controller.preflight.aggregator = preflight.NewSlowNodeAggregator(10 * time.Second)
 	controller.preflight.aggregator.SetNowForTest(func() time.Time { return now })
 
-	controller.onEvent(preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
 	if len(controller.preflight.aggregator.ExpireTimedOutWorkloads()) != 0 {
 		t.Fatal("ExpireTimedOutWorkloads() returned errors before timeout, want none")
 	}
@@ -74,7 +74,7 @@ func TestSweepExpiredPreflightReportsDropsIncompleteWorkload(t *testing.T) {
 		t.Fatalf("ExpireTimedOutWorkloads error = %q, want report count detail", errs[0])
 	}
 
-	controller.onEvent(preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
 	assertNodeUnschedulable(t, client, "node-a", false)
 }
 
@@ -88,10 +88,10 @@ func TestDuplicatePreflightEventDoesNotRefreshTimeoutWindow(t *testing.T) {
 	controller.preflight.aggregator.SetNowForTest(func() time.Time { return now })
 
 	evt := preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a"))
-	controller.onEvent(evt)
+	controller.onEvent(context.Background(), evt)
 
 	now = now.Add(9 * time.Second)
-	controller.onEvent(evt)
+	controller.onEvent(context.Background(), evt)
 
 	now = now.Add(2 * time.Second)
 	errs := controller.preflight.aggregator.ExpireTimedOutWorkloads()
@@ -143,12 +143,12 @@ func TestProcessedPreflightEntriesAreDroppedWhenWorkloadCompletes(t *testing.T) 
 	)
 	controller := NewController(client, nil, time.Minute, 0)
 
-	controller.onEvent(preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-a", "job-a", reportText("job-a", 2, 0, "node-a")))
 	if controller.preflight.processed.Len() != 1 {
 		t.Fatalf("processed.Len() after first report = %d, want 1", controller.preflight.processed.Len())
 	}
 
-	controller.onEvent(preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
+	controller.onEvent(context.Background(), preflightEvent("default", "node-b", "job-a", reportText("job-a", 2, 1, "node-b")))
 	if controller.preflight.processed.Len() != 0 {
 		t.Fatalf("processed.Len() after workload completion = %d, want 0", controller.preflight.processed.Len())
 	}
@@ -173,7 +173,7 @@ func TestDay2NodeEventSkipsJobRecovery(t *testing.T) {
 	)
 	controller := NewController(client, nil, 0, 0)
 
-	controller.onEvent(events.Event{
+	controller.onEvent(context.Background(), events.Event{
 		ResourceType: events.Node,
 		Name:         "node-a",
 		Reason:       events.Day2EventReason,
@@ -184,6 +184,36 @@ func TestDay2NodeEventSkipsJobRecovery(t *testing.T) {
 		t.Fatalf("Get(pod-a) error = %v, want pod to remain because day2 should skip job recovery", err)
 	}
 	assertNodeUnschedulable(t, client, "node-a", true)
+}
+
+func TestStopReturnsWithoutEventStreamClose(t *testing.T) {
+	t.Parallel()
+
+	stream := blockingEventStream{ch: make(chan events.Event)}
+	controller := NewController(fake.NewSimpleClientset(), stream, 0, time.Hour)
+	if err := controller.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		controller.Stop()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not return before event stream closed")
+	}
+}
+
+type blockingEventStream struct {
+	ch <-chan events.Event
+}
+
+func (s blockingEventStream) EventChan() <-chan events.Event {
+	return s.ch
 }
 
 func preflightEvent(namespace, nodeName, _ string, report string) events.Event {

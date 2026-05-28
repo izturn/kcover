@@ -54,6 +54,8 @@ type workloadPlan struct {
 	batchCount  int
 }
 
+const maxBatchCount = 5
+
 type WorkloadTimeoutError struct {
 	Namespace       string
 	WorkloadName    string
@@ -181,7 +183,7 @@ func (c *SlowNodeAggregator) AddReport(ns, workloadName, reportText string) (rea
 		return false, nil, nil
 	}
 
-	slowNodes = detectSlowNodes(wkl.nodeReports, wkl.expectedBatchCount)
+	slowNodes = detectSlowNodes(ns, workloadName, wkl.nodeReports, wkl.expectedBatchCount)
 
 	delete(c.workloads, key)
 	return true, slowNodes, nil
@@ -276,56 +278,111 @@ type pairKey struct {
 // Final result = union(fail-fast abnormal nodes, pairwise slow nodes).
 // This ensures fail-fast nodes are always reported, while they do not distort
 // the batch-intersection slow-node decision.
-func detectSlowNodes(nodeReports map[nodeName]nodeReport, expectedBatchCount int) []string {
-	// abnormalNodes 保存最终输出，既包括 fail-fast 直接判异常的节点，也包括
-	// 后续通过 batch 交集规则识别出的 pairwise slow node。
+func detectSlowNodes(ns, workloadName string, nodeReports map[nodeName]nodeReport, expectedBatchCount int) []string {
+	abnormalNodes, preflightReports, hasFailFast := classifyNodeReports(ns, workloadName, nodeReports)
+
+	failedByBatch := failedNodeIPsByBatch(preflightReports)
+	observedBatchCount := observedBatchCount(preflightReports)
+	logFailedNodesByBatch(ns, workloadName, failedByBatch)
+
+	if shouldReturnNoSlowNodes(expectedBatchCount, observedBatchCount, len(failedByBatch), hasFailFast) {
+		logNoSlowNodeReason(ns, workloadName, observedBatchCount, expectedBatchCount, len(failedByBatch))
+		return nil
+	}
+
+	mergePairwiseSlowNodes(ns, workloadName, abnormalNodes, nodeReports, failedByBatch)
+	return finalizeSlowNodes(ns, workloadName, abnormalNodes)
+}
+
+func classifyNodeReports(ns, workloadName string, nodeReports map[nodeName]nodeReport) (nodeNameSet, map[nodeName]nodeReport, bool) {
 	abnormalNodes := make(nodeNameSet, len(nodeReports))
-	// preflightReports 只保留未 fail-fast 的报告；pairwise 聚合只对这部分生效。
 	preflightReports := make(map[nodeName]nodeReport, len(nodeReports))
 	hasFailFast := false
+
 	for key, report := range nodeReports {
-		if report.failFast {
-			// gpu/storage 已经失败的节点直接进入最终异常集合，不再参与 batch 交集计算。
-			hasFailFast = true
-			abnormalNodes[report.nodeName] = struct{}{}
+		if !report.failFast {
+			preflightReports[key] = report
 			continue
 		}
-		preflightReports[key] = report
+
+		hasFailFast = true
+		abnormalNodes[report.nodeName] = struct{}{}
+		klog.V(4).InfoS("preflight report marked fail-fast", "namespace", ns, "workload", workloadName, "node", report.nodeName, "nodeIP", report.selfIP)
 	}
 
-	failedNodeIPsByBatch := failedNodeIPsByBatch(preflightReports)
-	if expectedBatchCount > 0 && len(failedNodeIPsByBatch) < expectedBatchCount && !hasFailFast {
-		// 没有 fail-fast 兜底时，缺少 batch 意味着 pairwise 证据不完整，此时不输出慢节点。
-		return nil
+	return abnormalNodes, preflightReports, hasFailFast
+}
+
+func logFailedNodesByBatch(ns, workloadName string, failedByBatch map[batchIndex]nodeIPSet) {
+	if len(failedByBatch) == 0 {
+		return
 	}
-	if len(failedNodeIPsByBatch) > 0 {
-		// nodeIPToName 用 report.NodeIP -> node_name 建立映射，便于把 batch 里的 nodeIP
-		// 还原成最终对外输出的 node_name。
-		nodeIPToName := make(map[nodeIP]nodeName, len(nodeReports))
-		for _, report := range nodeReports {
-			if report.selfIP == "" {
-				continue
-			}
-			nodeIPToName[report.selfIP] = report.nodeName
+
+	klog.V(4).InfoS("preflight failed nodes by batch", "namespace", ns, "workload", workloadName, "batches", formatFailedNodeIPsByBatch(failedByBatch))
+}
+
+func shouldReturnNoSlowNodes(expectedBatchCount, observedBatchCount, failedBatchCount int, hasFailFast bool) bool {
+	if hasFailFast || expectedBatchCount <= 0 {
+		return false
+	}
+
+	if observedBatchCount >= expectedBatchCount && failedBatchCount == 0 {
+		return true
+	}
+
+	return failedBatchCount < expectedBatchCount
+}
+
+func logNoSlowNodeReason(ns, workloadName string, observedBatchCount, expectedBatchCount, failedBatchCount int) {
+	if observedBatchCount >= expectedBatchCount && failedBatchCount == 0 {
+		return
+	}
+
+	if observedBatchCount < expectedBatchCount {
+		klog.V(4).InfoS("preflight missing observed batches", "namespace", ns, "workload", workloadName, "observedBatchCount", observedBatchCount, "expectedBatchCount", expectedBatchCount, "failedBatchCount", failedBatchCount)
+		return
+	}
+
+	klog.V(4).InfoS("preflight at least one expected batch has no failed pair", "namespace", ns, "workload", workloadName, "observedBatchCount", observedBatchCount, "expectedBatchCount", expectedBatchCount, "failedBatchCount", failedBatchCount, "nonFailedBatchCount", observedBatchCount-failedBatchCount)
+}
+
+func mergePairwiseSlowNodes(ns, workloadName string, abnormalNodes nodeNameSet, nodeReports map[nodeName]nodeReport, failedByBatch map[batchIndex]nodeIPSet) {
+	if len(failedByBatch) == 0 {
+		return
+	}
+
+	nodeIPToName := nodeIPToName(nodeReports)
+	slowNodes := intersectFailedNodeIPs(failedByBatch, nodeIPToName)
+	klog.V(4).InfoS("preflight pairwise slow nodes", "namespace", ns, "workload", workloadName, "nodes", slowNodes)
+	for _, slowNodeName := range slowNodes {
+		abnormalNodes[nodeName(slowNodeName)] = struct{}{}
+	}
+}
+
+func nodeIPToName(nodeReports map[nodeName]nodeReport) map[nodeIP]nodeName {
+	result := make(map[nodeIP]nodeName, len(nodeReports))
+	for _, report := range nodeReports {
+		if report.selfIP == "" {
+			continue
 		}
-
-		// 交集结果表示“在所有有效 batch 中都出现在失败集合里的节点”，把它们并入最终异常集合。
-		slowNodes := intersectFailedNodeIPs(failedNodeIPsByBatch, nodeIPToName)
-		for _, slowNodeName := range slowNodes {
-			abnormalNodes[nodeName(slowNodeName)] = struct{}{}
-		}
+		result[report.selfIP] = report.nodeName
 	}
 
+	return result
+}
+
+func finalizeSlowNodes(ns, workloadName string, abnormalNodes nodeNameSet) []string {
 	if len(abnormalNodes) == 0 {
+		klog.V(4).InfoS("preflight final slow nodes", "namespace", ns, "workload", workloadName, "nodes", []string{})
 		return nil
 	}
 
-	// 结果统一去重后按字典序输出，保证行为稳定、便于测试断言。
 	result := make([]string, 0, len(abnormalNodes))
 	for nodeName := range abnormalNodes {
 		result = append(result, string(nodeName))
 	}
 	sort.Strings(result)
+	klog.V(4).InfoS("preflight final slow nodes", "namespace", ns, "workload", workloadName, "nodes", result)
 
 	return result
 }
@@ -420,6 +477,51 @@ func intersectFailedNodeIPs(failedNodeIPsByBatch map[batchIndex]nodeIPSet, nodeI
 	return result
 }
 
+func formatFailedNodeIPsByBatch(failedNodeIPsByBatch map[batchIndex]nodeIPSet) map[int][]string {
+	formatted := make(map[int][]string, len(failedNodeIPsByBatch))
+	for batchIdx, nodeIPs := range failedNodeIPsByBatch {
+		batchNodes := make([]string, 0, len(nodeIPs))
+		for ip := range nodeIPs {
+			batchNodes = append(batchNodes, string(ip))
+		}
+		sort.Strings(batchNodes)
+		formatted[int(batchIdx)] = batchNodes
+	}
+
+	return formatted
+}
+
+func skippedBatchIdentity(batchMap map[string]any, reporterIP nodeIP) ([2]nodeIP, nodeIP, error) {
+	if pair, ok := pairField(batchMap["pair"]); ok {
+		selfIP, err := batchSelfIP(batchMap, reporterIP, pair)
+		if err != nil {
+			return [2]nodeIP{}, "", err
+		}
+		return pair, selfIP, nil
+	}
+
+	selfIP, ok := batchMap["self_ip"].(string)
+	if !ok || selfIP == "" {
+		return [2]nodeIP{}, "", fmt.Errorf("invalid self_ip")
+	}
+	selfIPValue := nodeIP(selfIP)
+
+	// Some skip-only batches (for example idle_roll_over) omit the peer pair.
+	// Treat them as a self-reported abnormal signal for the reporting node.
+	return [2]nodeIP{selfIPValue, selfIPValue}, selfIPValue, nil
+}
+
+func observedBatchCount(nodeReports map[nodeName]nodeReport) int {
+	observed := make(map[batchIndex]struct{})
+	for _, report := range nodeReports {
+		for _, result := range report.batchResults {
+			observed[result.BatchIdx] = struct{}{}
+		}
+	}
+
+	return len(observed)
+}
+
 func extractNodeReport(txt string) (Report, workloadPlan, []batchResult, error) {
 	report, err := parseReport(txt)
 	if err != nil {
@@ -503,6 +605,22 @@ func extractBatchResults(payload map[string]any, report Report, plan workloadPla
 
 	batchResultsByIndex := make(map[batchIndex]batchResult, plan.batchCount)
 	for _, item := range batchRaw {
+		batchMap, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid batch payload type %T", item)
+		}
+
+		rawBatchIdx, err := intField(batchMap["batch_idx"])
+		if err != nil {
+			return nil, fmt.Errorf("invalid batch_idx: %w", err)
+		}
+		if rawBatchIdx < 0 {
+			return nil, fmt.Errorf("batch_idx %d out of range [0,%d)", rawBatchIdx, plan.batchCount)
+		}
+		if rawBatchIdx >= plan.batchCount {
+			continue
+		}
+
 		result, err := extractBatchResult(item, report.NodeIP, plan.batchCount, busBWThresholdGBPS)
 		if err != nil {
 			return nil, err
@@ -530,6 +648,25 @@ func extractBatchResult(item any, reporterIP string, batchCount int, busBWThresh
 		return batchResult{}, fmt.Errorf("batch_idx %d out of range [0,%d)", rawBatchIdx, batchCount)
 	}
 	batchIdx := batchIndex(rawBatchIdx)
+	status, _ := batchMap["status"].(string)
+	if strings.EqualFold(status, "skip") {
+		pair, selfIP, err := skippedBatchIdentity(batchMap, nodeIP(reporterIP))
+		if err != nil {
+			return batchResult{}, fmt.Errorf("batch %d: %w", batchIdx, err)
+		}
+		failed, err := batchFailed(batchMap, rawBatchIdx, busBWThresholdGBPS)
+		if err != nil {
+			return batchResult{}, err
+		}
+
+		return batchResult{
+			BatchIdx:   batchIdx,
+			PairFirst:  pair[0],
+			PairSecond: pair[1],
+			SelfIP:     selfIP,
+			Failed:     failed,
+		}, nil
+	}
 
 	pair, ok := pairField(batchMap["pair"])
 	if !ok {
@@ -558,6 +695,10 @@ func batchFailed(batchMap map[string]any, batchIdx int, busBWThresholdGBPS float
 	if status, ok := batchMap["status"].(string); ok && strings.EqualFold(status, "fail") {
 		return true, nil
 	}
+	if status, ok := batchMap["status"].(string); ok && strings.EqualFold(status, "skip") {
+		klog.Warningf("preflight batch skipped and treated as abnormal: batchIdx=%d pair=%v selfIP=%v reason=%v", batchIdx, batchMap["pair"], batchMap["self_ip"], batchMap["reason"])
+		return true, nil
+	}
 
 	allreduceMS, errMS := floatField(batchMap["allreduce_ms"])
 	allreduceShape, errShape := intField(batchMap["allreduce_shape"])
@@ -571,7 +712,8 @@ func batchFailed(batchMap map[string]any, batchIdx int, busBWThresholdGBPS float
 		return true, nil
 	}
 
-	return calculateBusBW(allreduceMS, allreduceShape, dtypeBytes, batchWorldSize) < busBWThresholdGBPS, nil
+	bw := calculateBusBW(allreduceMS, allreduceShape, dtypeBytes, batchWorldSize)
+	return bw < busBWThresholdGBPS, nil
 }
 
 func calculateBusBW(allreduceMS float64, allreduceShape, dtypeBytes, batchWorldSize int) float64 {
@@ -631,15 +773,16 @@ func resolveNodeName(nodeIPToName map[nodeIP]nodeName, ip nodeIP) string {
 	return string(ip)
 }
 
-const maxBatch = 5
-
 func buildWorkloadPlan(workloadSize int) (workloadPlan, error) {
 	plan := workloadPlan{}
 	if workloadSize <= 0 {
 		return workloadPlan{}, fmt.Errorf("cannot resolve preflight layout without workload_size")
 	}
+	if workloadSize%2 != 0 {
+		return workloadPlan{}, fmt.Errorf("odd workload sizes are not supported: workload_size=%d", workloadSize)
+	}
 	plan.reportCount = workloadSize
-	plan.batchCount = min(workloadSize-1, maxBatch)
+	plan.batchCount = min(workloadSize-1, maxBatchCount)
 	if plan.reportCount <= 1 {
 		return workloadPlan{}, fmt.Errorf("invalid expected report count: %d", plan.reportCount)
 	}

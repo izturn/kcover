@@ -45,7 +45,7 @@ agent:
     repository: baizeai/kcover-agent
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "latest"
+    tag: "v0.0.8"
 
   imagePullSecrets: []
 
@@ -91,6 +91,10 @@ agent:
       hostPath:
         path: /var/lib/kcover/preflight
         type: DirectoryOrCreate
+    - name: host-localtime
+      hostPath:
+        path: /etc/localtime
+        type: File
   # - name: foo
   #   secret:
   #     secretName: mysecret
@@ -102,6 +106,9 @@ agent:
       mountPath: /dev/infiniband
     - name: preflight-report
       mountPath: /var/lib/kcover/preflight
+    - name: host-localtime
+      mountPath: /etc/localtime
+      readOnly: true
   # - name: foo
   #   mountPath: "/etc/foo"
   #   readOnly: true
@@ -123,7 +130,7 @@ controller:
     repository: baizeai/kcover-controller
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "latest"
+    tag: "v0.0.8"
 
   imagePullSecrets: []
 
