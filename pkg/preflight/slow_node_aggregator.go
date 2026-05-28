@@ -54,6 +54,8 @@ type workloadPlan struct {
 	batchCount  int
 }
 
+const maxBatchCount = 5
+
 type WorkloadTimeoutError struct {
 	Namespace       string
 	WorkloadName    string
@@ -428,12 +430,6 @@ func failedNodeIPsByBatch(nodeReports map[nodeName]nodeReport) map[batchIndex]no
 	return failedByBatch
 }
 
-/*
-report1: {"version": 1, "workload": "preflight9-2workers-fail4-node-0", "workload_size": 3, "rank": 2, "node_name": "c500-worker1", "node_ip": "10.107.204.141", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.141", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": [], "self_ip": "10.107.204.141", "status": "skip", "reason": "idle_roll_over"}]}
-report2: {"version": 1, "workload": "preflight9-2workers-fail4-node-0", "workload_size": 3, "rank": 1, "node_name": "c500-worker2", "node_ip": "10.107.204.142", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": ["10.107.204.141", "10.107.204.142"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}, {"schema": "v3", "batch_idx": 1, "pair": [], "self_ip": "10.107.204.142", "status": "skip", "reason": "idle_roll_over"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.142", "status": "skip", "reason": "gid_index_mismatch"}]}
-report3: {"version": 1, "workload": "preflight9-2workers-fail4-node-0", "workload_size": 3, "rank": 0, "node_name": "c500-worker3", "node_ip": "10.107.204.143", "storage_check": 1, "gpu_check": 1, "node_check_busbw_threshold_gbps": "5", "batches": [{"schema": "v3", "batch_idx": 0, "pair": [], "self_ip": "10.107.204.143", "status": "skip", "reason": "idle_roll_over"}, {"schema": "v3", "batch_idx": 1, "pair": ["10.107.204.141", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}, {"schema": "v3", "batch_idx": 2, "pair": ["10.107.204.142", "10.107.204.143"], "self_ip": "10.107.204.143", "status": "skip"}]}
-*/
-
 // intersectFailedNodeIPs computes the intersection of failed node-IP sets from
 // all batches. When an IP can be resolved to a node name, the node name is
 // returned; otherwise the original IP is kept for diagnostics.
@@ -609,6 +605,22 @@ func extractBatchResults(payload map[string]any, report Report, plan workloadPla
 
 	batchResultsByIndex := make(map[batchIndex]batchResult, plan.batchCount)
 	for _, item := range batchRaw {
+		batchMap, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid batch payload type %T", item)
+		}
+
+		rawBatchIdx, err := intField(batchMap["batch_idx"])
+		if err != nil {
+			return nil, fmt.Errorf("invalid batch_idx: %w", err)
+		}
+		if rawBatchIdx < 0 {
+			return nil, fmt.Errorf("batch_idx %d out of range [0,%d)", rawBatchIdx, plan.batchCount)
+		}
+		if rawBatchIdx >= plan.batchCount {
+			continue
+		}
+
 		result, err := extractBatchResult(item, report.NodeIP, plan.batchCount, busBWThresholdGBPS)
 		if err != nil {
 			return nil, err
@@ -770,7 +782,7 @@ func buildWorkloadPlan(workloadSize int) (workloadPlan, error) {
 		return workloadPlan{}, fmt.Errorf("odd workload sizes are not supported: workload_size=%d", workloadSize)
 	}
 	plan.reportCount = workloadSize
-	plan.batchCount = workloadSize - 1
+	plan.batchCount = min(workloadSize-1, maxBatchCount)
 	if plan.reportCount <= 1 {
 		return workloadPlan{}, fmt.Errorf("invalid expected report count: %d", plan.reportCount)
 	}

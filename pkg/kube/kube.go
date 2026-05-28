@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/baizeai/kcover/pkg/constants"
 
@@ -17,8 +18,13 @@ import (
 )
 
 const UnschedulableNodeTaintKey = "node.kubernetes.io/unschedulable"
+const requestTimeout = 10 * time.Second
 
 var serviceAccountNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+func WithRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, requestTimeout)
+}
 
 func NodeNameFromEnv() string {
 	if nodeName := os.Getenv(constants.NodeNameEnv); nodeName != "" {

@@ -36,6 +36,7 @@ RUN apt-get update \
 		libibverbs1 \
 		libnl-3-200 \
 		libnl-route-3-200 \
+		tzdata \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/kcover-agent kcover-agent

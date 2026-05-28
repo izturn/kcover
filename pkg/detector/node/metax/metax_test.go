@@ -1,6 +1,7 @@
 package metax
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"reflect"
@@ -121,7 +122,7 @@ func TestNodeHasPositiveMetaXGPUCapacity(t *testing.T) {
 		}},
 	}))
 
-	enabled, err := instance.hasMetaXGPUCapacity()
+	enabled, err := instance.hasMetaXGPUCapacity(context.Background())
 	if err != nil {
 		t.Fatalf("nodeHasPositiveMetaXGPUCapacity(...) error = %v", err)
 	}
@@ -135,7 +136,7 @@ func TestNodeHasPositiveMetaXGPUCapacityReturnsFalseWhenMissing(t *testing.T) {
 
 	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}))
 
-	enabled, err := instance.hasMetaXGPUCapacity()
+	enabled, err := instance.hasMetaXGPUCapacity(context.Background())
 	if err != nil {
 		t.Fatalf("nodeHasPositiveMetaXGPUCapacity(...) error = %v", err)
 	}
@@ -154,7 +155,7 @@ func TestNodeHasPositiveMetaXGPUCapacityReturnsFalseWhenZero(t *testing.T) {
 		}},
 	}))
 
-	enabled, err := instance.hasMetaXGPUCapacity()
+	enabled, err := instance.hasMetaXGPUCapacity(context.Background())
 	if err != nil {
 		t.Fatalf("nodeHasPositiveMetaXGPUCapacity(...) error = %v", err)
 	}
@@ -168,13 +169,13 @@ func TestDay2CheckSkipsNodeWithoutMetaXGPUCapacity(t *testing.T) {
 
 	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset())
 	checkCalled := false
-	instance.capabilityCheck = func() (bool, error) { return false, nil }
+	instance.capabilityCheck = func(context.Context) (bool, error) { return false, nil }
 	instance.checkFn = func() error {
 		checkCalled = true
 		return fmt.Errorf("unexpected day2 check")
 	}
 
-	instance.day2Check()
+	instance.day2Check(context.Background())
 
 	if checkCalled {
 		t.Fatal("day2Check() invoked checkFn on node without MetaX GPU capacity")
@@ -191,13 +192,13 @@ func TestDay2CheckEmitsEventWhenCapabilityEnabledAndCheckFails(t *testing.T) {
 	t.Parallel()
 
 	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset())
-	instance.capabilityCheck = func() (bool, error) { return true, nil }
+	instance.capabilityCheck = func(context.Context) (bool, error) { return true, nil }
 	instance.checkFn = func() error { return fmt.Errorf("boom") }
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		instance.day2Check()
+		instance.day2Check(context.Background())
 	}()
 
 	select {
@@ -215,6 +216,58 @@ func TestDay2CheckEmitsEventWhenCapabilityEnabledAndCheckFails(t *testing.T) {
 		t.Fatal("day2Check() did not return after emitting event")
 	}
 	instance.Stop()
+}
+
+func TestDay2CheckReturnsWhenContextCanceledBeforeSendingEvent(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a"}, 5, fake.NewSimpleClientset())
+	instance.capabilityCheck = func(context.Context) (bool, error) { return true, nil }
+	instance.checkFn = func() error { return fmt.Errorf("boom") }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		instance.day2Check(ctx)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("day2Check() did not return after Stop()")
+	}
+}
+
+func TestStopClosesEventChannelAfterStartGoroutineExits(t *testing.T) {
+	t.Parallel()
+
+	instance := NewDetector(kcoverconfig.MetaX{NodeName: "node-a", Day2CheckTime: defaultCheckTime}, 5, fake.NewSimpleClientset())
+	if err := instance.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		instance.Stop()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not return")
+	}
+
+	select {
+	case _, ok := <-instance.EventChan():
+		if ok {
+			t.Fatal("event channel still open after Stop()")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event channel was not closed after Stop()")
+	}
 }
 
 func TestParseHotspotTemperatures(t *testing.T) {

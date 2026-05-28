@@ -767,6 +767,56 @@ func TestExtractNodeReportUsesReportBusBWThreshold(t *testing.T) {
 	}
 }
 
+func TestBuildWorkloadPlanCapsBatchCountAtMaxLogicalBatchCount(t *testing.T) {
+	t.Parallel()
+
+	plan, err := buildWorkloadPlan(8)
+	if err != nil {
+		t.Fatalf("buildWorkloadPlan(...) error = %v", err)
+	}
+	if plan.reportCount != 8 || plan.batchCount != maxBatchCount {
+		t.Fatalf("plan = %+v, want reports=8 batches=%d", plan, maxBatchCount)
+	}
+}
+
+func TestExtractNodeReportIgnoresBatchIndexesBeyondMaxBatchCount(t *testing.T) {
+	t.Parallel()
+
+	reportText := `{
+	  "version": 1,
+	  "workload": "pre-8-node-0",
+	  "workload_size": 8,
+	  "rank": 0,
+	  "node_name": "node-a",
+	  "node_ip": "10.0.0.1",
+	  "gpu_check": 1,
+	  "storage_check": 1,
+	  "batches": [
+	    {"batch_idx": 0, "pair": ["10.0.0.1", "10.0.0.2"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 1, "pair": ["10.0.0.1", "10.0.0.3"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 2, "pair": ["10.0.0.1", "10.0.0.4"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 3, "pair": ["10.0.0.1", "10.0.0.5"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 4, "pair": ["10.0.0.1", "10.0.0.6"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 5, "pair": ["10.0.0.1", "10.0.0.7"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4},
+	    {"batch_idx": 6, "pair": ["10.0.0.1", "10.0.0.8"], "self_ip": "10.0.0.1", "allreduce_ms": 1.234, "world_size": 16, "allreduce_shape": 16777216, "dtype_bytes": 4}
+	  ]
+	}`
+
+	_, plan, batchResults, err := extractNodeReport(reportText)
+	if err != nil {
+		t.Fatalf("extractNodeReport(...) error = %v", err)
+	}
+	if plan.batchCount != maxBatchCount {
+		t.Fatalf("plan.batchCount = %d, want %d", plan.batchCount, maxBatchCount)
+	}
+	if len(batchResults) != maxBatchCount {
+		t.Fatalf("len(batchResults) = %d, want %d", len(batchResults), maxBatchCount)
+	}
+	if batchResults[len(batchResults)-1].BatchIdx != batchIndex(maxBatchCount-1) {
+		t.Fatalf("last batch index = %d, want %d", batchResults[len(batchResults)-1].BatchIdx, maxBatchCount-1)
+	}
+}
+
 func TestExtractNodeReportRejectsNonStringBusBWThreshold(t *testing.T) {
 	t.Parallel()
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/baizeai/kcover/pkg/kube"
+
 	"github.com/jellydator/ttlcache/v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,7 +15,7 @@ import (
 
 var ttlCache = ttlcache.New[string, map[string]string]()
 
-func getPodRelatedJobLabels(cli kubernetes.Interface, pod *corev1.Pod) (map[string]string, error) {
+func getPodRelatedJobLabels(ctx context.Context, cli kubernetes.Interface, pod *corev1.Pod) (map[string]string, error) {
 	if len(pod.OwnerReferences) < 1 {
 		return nil, fmt.Errorf("pod %s/%s has no owner", pod.Namespace, pod.Name)
 	}
@@ -33,9 +35,12 @@ func getPodRelatedJobLabels(cli kubernetes.Interface, pod *corev1.Pod) (map[stri
 	}
 
 	unstr := unstructured.Unstructured{}
+	ctx, cancel := kube.WithRequestTimeout(ctx)
+	defer cancel()
+
 	err := cli.Discovery().RESTClient().Get().
 		AbsPath(fmt.Sprintf("/apis/%s/namespaces/%s/%s/%s", owner.APIVersion, pod.Namespace, resource, owner.Name)).
-		Do(context.Background()).Into(&unstr)
+		Do(ctx).Into(&unstr)
 	if err != nil {
 		return nil, err
 	}

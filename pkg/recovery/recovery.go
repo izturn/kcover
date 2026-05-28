@@ -22,7 +22,8 @@ type RecoveryController struct {
 	client                 kubernetes.Interface
 	eventStream            events.Stream
 	eventSink              events.Sink
-	stopCh                 chan struct{}
+	cancel                 context.CancelFunc
+	doneCh                 chan struct{}
 	preflight              *preflightTracker
 	preflightSweepInterval time.Duration
 	restartDuration        time.Duration
@@ -40,7 +41,6 @@ func NewController(cli kubernetes.Interface, stream events.Stream, preflightRepo
 		client:                 cli,
 		eventStream:            stream,
 		eventSink:              events.NewKubeEventSink(cli),
-		stopCh:                 make(chan struct{}),
 		preflight:              newPreflightTracker(preflightReportCollectionTimeout),
 		preflightSweepInterval: preflightSweepInterval,
 		restartDuration:        time.Second * 30,
@@ -58,15 +58,17 @@ func (r *RecoveryController) handlePreflightTimeout(timeoutErr preflight.Workloa
 	klog.ErrorS(nil, "preflight aggregation timeout", "node", anchorNode, "namespace", timeoutErr.Namespace, "workload", timeoutErr.WorkloadName, "timeout", timeoutErr.Timeout, "receivedReports", timeoutErr.ReceivedReports, "expectedReports", timeoutErr.ExpectedReports, "reportedNodes", timeoutErr.ReportedNodes)
 }
 
-func (r *RecoveryController) onPodError(namespace, name string) {
+func (r *RecoveryController) onPodError(ctx context.Context, namespace, name string) {
 	klog.V(2).InfoS("handle pod error", "namespace", namespace, "pod", name)
-	pod, err := r.client.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	requestCtx, cancel := kube.WithRequestTimeout(ctx)
+	pod, err := r.client.CoreV1().Pods(namespace).Get(requestCtx, name, metav1.GetOptions{})
+	cancel()
 	if err != nil {
 		klog.ErrorS(err, "failed to get pod", "namespace", namespace, "pod", name)
 		return
 	}
 
-	recoveryEnabled, err := r.isRecoveryEnabledForPod(pod)
+	recoveryEnabled, err := r.isRecoveryEnabledForPod(ctx, pod)
 	if err != nil {
 		klog.ErrorS(err, "failed to get recovery labels", "namespace", namespace, "pod", name)
 		return
@@ -91,15 +93,15 @@ func (r *RecoveryController) onPodError(namespace, name string) {
 	}
 
 	klog.V(2).InfoS("trigger pod recovery restart", "namespace", namespace, "job", jobLabel, "pod", name)
-	r.restartJob(context.Background(), namespace, jobLabel)
+	r.restartJob(ctx, namespace, jobLabel)
 }
 
-func (r *RecoveryController) isRecoveryEnabledForPod(pod *corev1.Pod) (bool, error) {
+func (r *RecoveryController) isRecoveryEnabledForPod(ctx context.Context, pod *corev1.Pod) (bool, error) {
 	if pod.Labels[constants.EnabledRecoveryLabel] == constants.True {
 		return true, nil
 	}
 
-	labels, err := getPodRelatedJobLabels(r.client, pod)
+	labels, err := getPodRelatedJobLabels(ctx, r.client, pod)
 	if err != nil {
 		return false, err
 	}
@@ -126,6 +128,9 @@ func (r *RecoveryController) allowJobRestart(namespace, jobLabel string) bool {
 }
 
 func (r *RecoveryController) restartJob(ctx context.Context, namespace, name string) {
+	ctx, cancel := kube.WithRequestTimeout(ctx)
+	defer cancel()
+
 	err := r.client.CoreV1().Pods(namespace).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("%s=%s", constants.KubeflowJobLabel, name),
 	})
@@ -141,8 +146,11 @@ type nsName struct {
 	name string
 }
 
-func (r *RecoveryController) ensureNodeUnschedulable(name string) bool {
-	if err := kube.TaintNodeUnschedulable(context.Background(), r.client, name); err != nil {
+func (r *RecoveryController) ensureNodeUnschedulable(ctx context.Context, name string) bool {
+	ctx, cancel := kube.WithRequestTimeout(ctx)
+	defer cancel()
+
+	if err := kube.TaintNodeUnschedulable(ctx, r.client, name); err != nil {
 		klog.ErrorS(err, "failed to mark node unschedulable", "node", name)
 		return false
 	}
@@ -151,41 +159,46 @@ func (r *RecoveryController) ensureNodeUnschedulable(name string) bool {
 	return true
 }
 
-func (r *RecoveryController) onNodeError(e events.Event) {
+func (r *RecoveryController) onNodeError(ctx context.Context, e events.Event) {
 	klog.V(2).InfoS("handle node error", "node", e.Name, "reason", e.Reason)
-	node, err := r.client.CoreV1().Nodes().Get(context.Background(), e.Name, metav1.GetOptions{})
+	requestCtx, cancel := kube.WithRequestTimeout(ctx)
+	node, err := r.client.CoreV1().Nodes().Get(requestCtx, e.Name, metav1.GetOptions{})
+	cancel()
 	if err != nil {
 		klog.ErrorS(err, "failed to get node", "node", e.Name)
 		return
 	}
 
 	if node.Spec.Unschedulable {
-		r.ensureNodeUnschedulable(e.Name)
+		r.ensureNodeUnschedulable(ctx, e.Name)
 		return
 	}
 
 	if e.Reason == events.Day2EventReason {
 		klog.V(2).InfoS("skip job recovery for day2 event", "node", e.Name, "reason", e.Reason)
-		r.ensureNodeUnschedulable(e.Name)
+		r.ensureNodeUnschedulable(ctx, e.Name)
 		return
 	}
 
-	jobs, err := r.listJobsOnNode(e.Name)
+	jobs, err := r.listJobsOnNode(ctx, e.Name)
 	if err != nil {
 		klog.ErrorS(err, "failed to list jobs on node", "node", e.Name)
 		return
 	}
 
 	for _, job := range jobs {
-		r.onPodError(job.ns, job.name)
+		r.onPodError(ctx, job.ns, job.name)
 	}
 
-	r.ensureNodeUnschedulable(e.Name)
+	r.ensureNodeUnschedulable(ctx, e.Name)
 }
 
-func (r *RecoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
+func (r *RecoveryController) listJobsOnNode(ctx context.Context, nodeName string) ([]nsName, error) {
 	// TODO: traner v2 & lws?
-	pods, err := r.client.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
+	ctx, cancel := kube.WithRequestTimeout(ctx)
+	defer cancel()
+
+	pods, err := r.client.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		LabelSelector: constants.KubeflowJobLabel,
 		FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
 	})
@@ -211,7 +224,7 @@ func (r *RecoveryController) listJobsOnNode(nodeName string) ([]nsName, error) {
 	return items, nil
 }
 
-func (r *RecoveryController) onPreflightReport(namespace string, e events.Event) {
+func (r *RecoveryController) onPreflightReport(ctx context.Context, namespace string, e events.Event) {
 	klog.V(2).InfoS("handle preflight report", "namespace", namespace, "node", e.Name, "annotations", e.Annotations, "messageBytes", len(e.Message))
 
 	result, err := r.preflight.handleReport(e)
@@ -249,7 +262,7 @@ func (r *RecoveryController) onPreflightReport(namespace string, e events.Event)
 
 	for _, node := range result.slowNodes {
 		klog.V(2).InfoS("preflight marked slow node", "node", node, "namespace", namespace, "workload", result.workloadName)
-		r.ensureNodeUnschedulable(node)
+		r.ensureNodeUnschedulable(ctx, node)
 	}
 }
 
@@ -259,22 +272,22 @@ func (r *RecoveryController) sweepExpiredPreflightReports() {
 	}
 }
 
-func (r *RecoveryController) onEvent(e events.Event) {
+func (r *RecoveryController) onEvent(ctx context.Context, e events.Event) {
 	klog.V(4).InfoS("recovery controller received event", "event", e)
 	switch e.ResourceType {
 	case events.Pod:
 		if e.EventType == events.Error {
 			klog.V(2).InfoS("dispatch pod event", "namespace", e.Namespace, "pod", e.Name)
-			r.onPodError(e.Namespace, e.Name)
+			r.onPodError(ctx, e.Namespace, e.Name)
 		}
 	case events.Node:
 		if events.IsPreflightEvent(e.Annotations) {
 			klog.V(2).InfoS("dispatch preflight event", "namespace", e.Namespace, "node", e.Name)
-			r.onPreflightReport(e.Namespace, e)
+			r.onPreflightReport(ctx, e.Namespace, e)
 			return
 		}
 		klog.V(2).InfoS("dispatch node event", "node", e.Name)
-		r.onNodeError(e)
+		r.onNodeError(ctx, e)
 	default:
 		klog.ErrorS(nil, "unsupported event resource type", "resourceType", e.ResourceType)
 	}
@@ -284,32 +297,43 @@ func (r *RecoveryController) Start() error {
 	if r.eventStream == nil {
 		return fmt.Errorf("event stream cannot be nil")
 	}
-	go func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	r.doneCh = make(chan struct{})
+
+	go func(ctx context.Context) {
+		defer close(r.doneCh)
 		ticker := time.NewTicker(r.preflightSweepInterval)
 		defer ticker.Stop()
+		eventCh := r.eventStream.EventChan()
 		for {
 			select {
-			case <-r.stopCh:
-				return // TODO: wait for event stream finish?
+			case <-ctx.Done():
+				return
 
 			case <-ticker.C:
 				r.sweepExpiredPreflightReports()
 
-			case e, ok := <-r.eventStream.EventChan():
+			case e, ok := <-eventCh:
 				if !ok {
 					klog.InfoS("recovery event stream closed")
 					return
 				}
-				r.onEvent(e)
+				r.onEvent(ctx, e)
 			}
 		}
 
-	}()
+	}(ctx)
 
 	klog.InfoS("recovery controller started")
 	return nil
 }
 
 func (r *RecoveryController) Stop() {
-	close(r.stopCh)
+	if r.cancel != nil {
+		r.cancel()
+	}
+	if r.doneCh != nil {
+		<-r.doneCh
+	}
 }
