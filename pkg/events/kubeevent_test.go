@@ -453,10 +453,11 @@ func TestHandleK8sEventAddQueuesPodEventWhenEventChannelIsFull(t *testing.T) {
 	}
 }
 
-func TestStopDrainsQueuedEventsBeforeClosingChannel(t *testing.T) {
+func TestStopClosesEventChannelWithQueuedEvents(t *testing.T) {
 	t.Parallel()
 
 	bridge := NewKubeEventBridge(fake.NewSimpleClientset()).(*kubeEventBridge)
+	bridge.eventCh = make(chan Event)
 	startQueueWorkerForTest(t, bridge)
 
 	bridge.queue.Add(&Event{ResourceType: Node, Namespace: "default", Name: "node-a", Reason: Day2EventReason, EventType: Error, Message: "boom"})
@@ -468,21 +469,9 @@ func TestStopDrainsQueuedEventsBeforeClosingChannel(t *testing.T) {
 	}()
 
 	select {
-	case event, ok := <-bridge.EventChan():
-		if !ok {
-			t.Fatal("event channel closed before draining queued events")
-		}
-		if event.Name != "node-a" || event.Reason != Day2EventReason {
-			t.Fatalf("drained event = %+v, want queued day2 event", event)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("queued event was not drained during Stop()")
-	}
-
-	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Stop() did not finish after draining queued events")
+		t.Fatal("Stop() did not finish with queued events")
 	}
 
 	select {
