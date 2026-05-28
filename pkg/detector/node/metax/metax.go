@@ -15,6 +15,7 @@ import (
 	"github.com/baizeai/kcover/cmd/agent/config"
 	d "github.com/baizeai/kcover/pkg/detector"
 	"github.com/baizeai/kcover/pkg/events"
+	"github.com/baizeai/kcover/pkg/kube"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,7 +28,6 @@ var gpuPrefix = []byte("GPU#")
 const expectedGPUStatus = "Available"
 const defaultExpectedHCAState = "PORT_ACTIVE"
 const bufferSize = 1
-const kubernetesRequestTimeout = 10 * time.Second
 
 const metaXGPUResourceName corev1.ResourceName = "metax-tech.com/gpu"
 
@@ -98,7 +98,7 @@ func (d *detector) hasMetaXGPUCapacity(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("node name is empty")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, kubernetesRequestTimeout)
+	ctx, cancel := kube.WithRequestTimeout(ctx)
 	defer cancel()
 
 	node, err := d.client.CoreV1().Nodes().Get(ctx, d.config.NodeName, metav1.GetOptions{})
